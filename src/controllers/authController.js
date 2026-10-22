@@ -76,7 +76,41 @@ export function googleCallback(req, res, next) {
   })(req, res, next);
 }
 
-// GET /api/auth/me — get current user
+// POST /api/auth/google-callback — called by NextAuth frontend
+export async function googleCallbackFromNextAuth(req, res) {
+  try {
+    const { name, email, photoURL, googleId } = req.body;
+
+    if (!email) {
+      return sendError(res, "VALIDATION_ERROR", "Email is required", 400);
+    }
+
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      user = await User.create({
+        name: name || "User",
+        email,
+        username: generateUsername(name || email.split("@")[0]),
+        photoURL: photoURL || null,
+        googleId,
+      });
+      logger.info(`New user registered via NextAuth: ${email}`);
+    } else {
+      // Update photo if changed
+      if (photoURL && user.photoURL !== photoURL) {
+        user.photoURL = photoURL;
+        await user.save();
+      }
+    }
+
+    const token = generateToken(user._id);
+    sendSuccess(res, { token, user });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
 export async function getMe(req, res) {
   sendSuccess(res, { user: req.user });
 }

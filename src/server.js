@@ -24,21 +24,43 @@ import adminRoutes from "./routes/admin.js";
 const app = express();
 const server = http.createServer(app);
 
-// Middleware
-app.use(helmet());
+// Trust Railway/Heroku proxy for accurate IPs
+app.set("trust proxy", 1);
+
+// CORS — allow configured client URLs (comma-separated in production)
+const allowedOrigins = (process.env.CLIENT_URL || "http://localhost:3000")
+  .split(",")
+  .map((o) => o.trim());
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, curl, etc.)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    },
     credentials: true,
   })
 );
+
+app.use(
+  helmet({
+    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: false,
+  })
+);
+
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 app.use(cookieParser());
 app.use(passport.initialize());
 app.use(
-  morgan("dev", {
+  morgan(process.env.NODE_ENV === "production" ? "combined" : "dev", {
     skip: (req) => req.url.startsWith("/socket.io"),
+    stream: {
+      write: (msg) => logger.info(msg.trimEnd()),
+    },
   })
 );
 
@@ -52,7 +74,12 @@ app.use("/api/admin", adminRoutes);
 
 // Health check
 app.get("/api/health", (req, res) => {
-  res.json({ success: true, message: "Piku server running" });
+  res.json({
+    success: true,
+    message: "Piku server running",
+    env: process.env.NODE_ENV,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // Error handling
@@ -67,9 +94,9 @@ async function start() {
   await initSocketServer(server);
   startCronJobs();
 
-  server.listen(PORT, () => {
-    logger.info(`Piku server running on port ${PORT}`);
-    logger.info(`Client URL: ${process.env.CLIENT_URL || "http://localhost:3000"}`);
+  server.listen(PORT, "0.0.0.0", () => {
+    logger.info(`Piku server running on port ${PORT} [${process.env.NODE_ENV}]`);
+    logger.info(`Allowed origins: ${allowedOrigins.join(", ")}`);
   });
 }
 

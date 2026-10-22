@@ -8,13 +8,14 @@ import { sendSuccess, sendError } from "../utils/helpers.js";
 // GET /api/admin/stats
 export async function getStats(req, res) {
   try {
-    const [totalUsers, totalChats, totalMessages, blockedUsers, recentUsers] =
+    const [totalUsers, totalChats, totalMessages, blockedUsers, onlineUsers, recentUsers] =
       await Promise.all([
         User.countDocuments(),
         Chat.countDocuments(),
         Message.countDocuments(),
         User.countDocuments({ "status.isBlocked": true }),
-        User.find().sort({ createdAt: -1 }).limit(5).select("name username photoURL createdAt"),
+        User.countDocuments({ isOnline: true }),
+        User.find().sort({ createdAt: -1 }).limit(5).select("name username photoURL createdAt isOnline"),
       ]);
 
     sendSuccess(res, {
@@ -22,6 +23,7 @@ export async function getStats(req, res) {
       totalChats,
       totalMessages,
       blockedUsers,
+      onlineUsers,
       recentUsers,
     });
   } catch (error) {
