@@ -10,6 +10,8 @@ import {
   unblockUser,
   muteUser,
   unmuteUser,
+  deleteUser,
+  broadcastNotification,
   getAllChats,
   getChatDetails,
   getChatMessages,
@@ -36,6 +38,10 @@ router.patch("/users/:id/block", validate(blockUserSchema), blockUser);
 router.patch("/users/:id/unblock", unblockUser);
 router.patch("/users/:id/mute", validate(muteUserSchema), muteUser);
 router.patch("/users/:id/unmute", unmuteUser);
+router.delete("/users/:id", deleteUser);
+
+// Broadcast notification to all users
+router.post("/broadcast", broadcastNotification);
 
 // Chat management
 router.get("/chats", getAllChats);

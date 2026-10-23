@@ -443,6 +443,71 @@ export async function adminDeleteMessage(req, res) {
   }
 }
 
+// DELETE /api/admin/users/:id — permanently delete a user
+export async function deleteUser(req, res) {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return sendError(res, "USER_NOT_FOUND", "User not found", 404);
+
+    // Prevent deleting protected accounts or self
+    if (user.isProtectedFromDeletion) {
+      return sendError(res, "FORBIDDEN", "This account is protected from deletion", 403);
+    }
+    if (user._id.toString() === req.userId.toString()) {
+      return sendError(res, "FORBIDDEN", "You cannot delete your own account", 403);
+    }
+
+    const userId = user._id.toString();
+
+    // Disconnect socket
+    const io = getIO();
+    if (io) {
+      io.to(userId).emit("account_status_changed", { status: "deleted" });
+    }
+
+    // Delete all messages sent or received by this user
+    await Message.updateMany(
+      { $or: [{ senderId: user._id }, { receiverId: user._id }] },
+      { isDeleted: true, text: "", fileUrl: null }
+    );
+
+    // Delete all chats involving this user
+    await Chat.deleteMany({ participants: user._id });
+
+    // Delete the user
+    await User.findByIdAndDelete(user._id);
+
+    sendSuccess(res, { message: "User deleted successfully" });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
+// POST /api/admin/broadcast — send notification to all online users
+export async function broadcastNotification(req, res) {
+  try {
+    const { message, type = "info" } = req.body;
+
+    if (!message?.trim()) {
+      return sendError(res, "VALIDATION_ERROR", "Message is required", 400);
+    }
+
+    const io = getIO();
+    if (io) {
+      io.emit("admin_broadcast", {
+        message: message.trim(),
+        type, // info | warning | error | success
+        sentAt: new Date().toISOString(),
+        sentBy: { name: req.user.name, username: req.user.username },
+      });
+    }
+
+    sendSuccess(res, { message: "Broadcast sent successfully" });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
 export default {
   getStats,
   getAllUsers,
@@ -450,6 +515,8 @@ export default {
   unblockUser,
   muteUser,
   unmuteUser,
+  deleteUser,
+  broadcastNotification,
   getAllChats,
   getChatDetails,
   getChatMessages,
