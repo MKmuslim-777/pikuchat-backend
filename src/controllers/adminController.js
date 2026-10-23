@@ -310,26 +310,30 @@ export async function runAudit(req, res) {
 
     // Find all non-deleted text messages containing banned keywords
     const messages = await Message.find({
-      text: { $regex: regexPattern, $options: "i" },
+      text: { $ne: "", $regex: regexPattern, $options: "i" },
       isDeleted: false,
     })
       .populate("senderId", "name username photoURL")
       .populate("receiverId", "name username")
-      .limit(500);
+      .limit(500)
+      .lean();
 
-    const matches = messages.map((msg) => {
-      const matchedKeyword = keywordList.find((kw) =>
-        msg.text.toLowerCase().includes(kw.toLowerCase())
-      );
-      return {
-        messageId: msg._id,
-        messageText: msg.text,
-        createdAt: msg.createdAt,
-        sender: msg.senderId,
-        receiver: msg.receiverId,
-        keyword: matchedKeyword,
-      };
-    });
+    const matches = messages
+      .filter((msg) => msg.senderId && msg.receiverId)
+      .map((msg) => {
+        const matchedKeyword = keywordList.find((kw) =>
+          msg.text?.toLowerCase().includes(kw.toLowerCase())
+        );
+        return {
+          messageId: msg._id,
+          messageText: msg.text,
+          createdAt: msg.createdAt,
+          sender: msg.senderId,
+          receiver: msg.receiverId,
+          keyword: matchedKeyword || "",
+        };
+      })
+      .filter((m) => m.keyword);
 
     sendSuccess(res, {
       matches,
