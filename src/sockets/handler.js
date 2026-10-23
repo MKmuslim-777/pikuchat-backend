@@ -151,8 +151,7 @@ export default function socketHandler(io, socket) {
   });
 
   // ─── message_delete ───────────────────────────────────────────────────────
-  socket.on("message_delete", async ({ messageId }, ack) => {
-    try {
+  socket.on("message_delete", async ({ messageId }, ack) => {    try {
       const msg = await Message.findOne({ _id: messageId, senderId: userId });
       if (!msg) {
         if (ack) ack({ success: false, error: "Message not found" });
@@ -179,8 +178,36 @@ export default function socketHandler(io, socket) {
     }
   });
 
-  // ─── disconnect ───────────────────────────────────────────────────────────
-  socket.on("disconnect", (reason) => {
+  // ─── message_react ────────────────────────────────────────────────────────
+  socket.on("message_react", async ({ messageId, emoji }, ack) => {
+    try {
+      const msg = await Message.findById(messageId);
+      if (!msg) { if (ack) ack({ success: false, error: "Message not found" }); return; }
+
+      const existing = msg.reactions.find(
+        (r) => r.userId.toString() === userId && r.emoji === emoji
+      );
+      if (existing) {
+        msg.reactions = msg.reactions.filter(
+          (r) => !(r.userId.toString() === userId && r.emoji === emoji)
+        );
+      } else {
+        msg.reactions = msg.reactions.filter((r) => r.userId.toString() !== userId);
+        msg.reactions.push({ userId, emoji });
+      }
+      await msg.save();
+
+      const payload = { messageId: msg._id, reactions: msg.reactions };
+      io.to(msg.receiverId.toString()).emit("message_reaction", payload);
+      socket.emit("message_reaction", payload);
+      if (ack) ack({ success: true, reactions: msg.reactions });
+    } catch (error) {
+      logger.error("Socket message_react error:", error.message);
+      if (ack) ack({ success: false, error: error.message });
+    }
+  });
+
+  // ─── disconnect ───────────────────────────────────────────────────────────  socket.on("disconnect", (reason) => {
     logger.info(`Socket disconnected: ${userId} (${reason})`);
     User.findByIdAndUpdate(userId, {
       isOnline: false,

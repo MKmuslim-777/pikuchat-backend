@@ -124,4 +124,51 @@ export async function deleteMessage(req, res) {
   }
 }
 
-export default { sendMessage, editMessage, deleteMessage };
+// PATCH /api/messages/:id/react — add or remove emoji reaction
+export async function reactToMessage(req, res) {
+  try {
+    const { emoji } = req.body;
+    if (!emoji) return sendError(res, "VALIDATION_ERROR", "Emoji is required", 400);
+
+    const message = await Message.findById(req.params.id);
+    if (!message) return sendError(res, "MESSAGE_NOT_FOUND", "Message not found", 404);
+
+    const existing = message.reactions.find(
+      (r) => r.userId.toString() === req.userId.toString() && r.emoji === emoji
+    );
+
+    if (existing) {
+      // Toggle off — remove reaction
+      message.reactions = message.reactions.filter(
+        (r) => !(r.userId.toString() === req.userId.toString() && r.emoji === emoji)
+      );
+    } else {
+      // Remove any other reaction from this user on this message first (one reaction per user)
+      message.reactions = message.reactions.filter(
+        (r) => r.userId.toString() !== req.userId.toString()
+      );
+      message.reactions.push({ userId: req.userId, emoji });
+    }
+
+    await message.save();
+
+    // Emit to both participants
+    const io = getIO();
+    if (io) {
+      io.to(message.receiverId.toString()).emit("message_reaction", {
+        messageId: message._id,
+        reactions: message.reactions,
+      });
+      io.to(message.senderId.toString()).emit("message_reaction", {
+        messageId: message._id,
+        reactions: message.reactions,
+      });
+    }
+
+    sendSuccess(res, { reactions: message.reactions });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
+export default { sendMessage, editMessage, deleteMessage, reactToMessage };

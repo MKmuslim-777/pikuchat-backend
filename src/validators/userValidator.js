@@ -8,7 +8,9 @@ export const updateProfileSchema = z.object({
     .max(20, "Username must be at most 20 characters")
     .regex(/^[a-z0-9_]+$/, "Username must be lowercase alphanumeric + underscore")
     .optional(),
-  photoURL: z.string().url().optional(),
+  photoURL: z.string().url().optional().or(z.literal("")),
+  bio: z.string().max(150, "Bio too long").optional(),
+  readReceiptsEnabled: z.boolean().optional(),
 });
 
 export const searchUserSchema = z.object({
