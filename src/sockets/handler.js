@@ -207,7 +207,8 @@ export default function socketHandler(io, socket) {
     }
   });
 
-  // ─── disconnect ───────────────────────────────────────────────────────────  socket.on("disconnect", (reason) => {
+  // ─── disconnect ───────────────────────────────────────────────────────────
+  socket.on("disconnect", (reason) => {
     logger.info(`Socket disconnected: ${userId} (${reason})`);
     User.findByIdAndUpdate(userId, {
       isOnline: false,
