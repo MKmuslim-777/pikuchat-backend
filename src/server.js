@@ -77,7 +77,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     success: true,
     message: "Piku server running",
-    version: "2.0.0",
+    version: "3.0.0",
     env: process.env.NODE_ENV,
     timestamp: new Date().toISOString(),
   });
