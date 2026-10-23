@@ -10,7 +10,14 @@ let io = null;
 export async function initSocketServer(httpServer) {
   io = new Server(httpServer, {
     cors: {
-      origin: process.env.CLIENT_URL || "http://localhost:3000",
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        const allowed = (process.env.CLIENT_URL || "http://localhost:3000")
+          .split(",")
+          .map((o) => o.trim());
+        if (allowed.includes(origin)) return callback(null, true);
+        callback(new Error(`CORS: origin ${origin} not allowed`));
+      },
       methods: ["GET", "POST"],
       credentials: true,
     },

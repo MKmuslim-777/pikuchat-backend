@@ -1,6 +1,8 @@
 import { Router } from "express";
 import authMiddleware from "../middleware/auth.js";
 import adminMiddleware from "../middleware/admin.js";
+import validate from "../middleware/validate.js";
+import { bannedKeywordSchema, muteUserSchema, blockUserSchema } from "../validators/messageValidator.js";
 import {
   getStats,
   getAllUsers,
@@ -16,6 +18,8 @@ import {
   deleteKeyword,
   runAudit,
   adminDeleteMessage,
+  getGallery,
+  adminDeleteFile,
 } from "../controllers/adminController.js";
 
 const router = Router();
@@ -28,9 +32,9 @@ router.get("/stats", getStats);
 
 // User management
 router.get("/users", getAllUsers);
-router.patch("/users/:id/block", blockUser);
+router.patch("/users/:id/block", validate(blockUserSchema), blockUser);
 router.patch("/users/:id/unblock", unblockUser);
-router.patch("/users/:id/mute", muteUser);
+router.patch("/users/:id/mute", validate(muteUserSchema), muteUser);
 router.patch("/users/:id/unmute", unmuteUser);
 
 // Chat management
@@ -40,7 +44,7 @@ router.get("/chats/:chatId/messages", getChatMessages);
 
 // Banned keywords
 router.get("/keywords", getKeywords);
-router.post("/keywords", addKeyword);
+router.post("/keywords", validate(bannedKeywordSchema), addKeyword);
 router.delete("/keywords/:id", deleteKeyword);
 
 // Safety audit
@@ -48,5 +52,9 @@ router.post("/audit", runAudit);
 
 // Admin message delete
 router.delete("/messages/:id", adminDeleteMessage);
+
+// Media gallery
+router.get("/gallery", getGallery);
+router.delete("/gallery/:id", adminDeleteFile);
 
 export default router;

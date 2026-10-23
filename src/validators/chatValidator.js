@@ -10,6 +10,7 @@ export const sendMessageSchema = z.object({
   text: z.string().max(5000, "Message too long").optional(),
   fileUrl: z.string().url().optional(),
   fileType: z.enum(["image", "video", "audio", "document", "other"]).optional(),
+  publicId: z.string().optional(),
 });
 
 export const editMessageSchema = z.object({

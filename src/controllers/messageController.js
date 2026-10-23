@@ -1,12 +1,13 @@
 import Message from "../models/Message.js";
 import Chat from "../models/Chat.js";
 import { getIO } from "../config/socket.js";
+import { deleteFromCloudinary } from "../config/cloudinary.js";
 import { sendSuccess, sendError } from "../utils/helpers.js";
 
 // POST /api/messages — send message (REST fallback)
 export async function sendMessage(req, res) {
   try {
-    const { chatId, receiverId, text, fileUrl, fileType } = req.body;
+    const { chatId, receiverId, text, fileUrl, fileType, publicId } = req.body;
 
     // Verify chat belongs to sender
     const chat = await Chat.findOne({
@@ -25,6 +26,7 @@ export async function sendMessage(req, res) {
       text: text || "",
       fileUrl: fileUrl || null,
       fileType: fileType || null,
+      publicId: publicId || null,
     });
 
     // Update chat lastMessage
@@ -97,9 +99,15 @@ export async function deleteMessage(req, res) {
       return sendError(res, "MESSAGE_NOT_FOUND", "Message not found", 404);
     }
 
+    // Delete file from Cloudinary if present
+    if (message.publicId) {
+      deleteFromCloudinary(message.publicId).catch(() => {});
+    }
+
     message.isDeleted = true;
     message.text = "";
     message.fileUrl = null;
+    message.publicId = null;
     await message.save();
 
     // Emit via socket

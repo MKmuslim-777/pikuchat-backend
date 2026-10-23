@@ -1,5 +1,4 @@
 import { Router } from "express";
-import passport from "passport";
 import { configurePassport, googleAuth, googleCallback, googleCallbackFromNextAuth, getMe, logout } from "../controllers/authController.js";
 import authMiddleware from "../middleware/auth.js";
 

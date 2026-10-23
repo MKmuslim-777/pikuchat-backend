@@ -3,6 +3,7 @@ import Chat from "../models/Chat.js";
 import Message from "../models/Message.js";
 import BannedKeyword from "../models/BannedKeyword.js";
 import { getIO } from "../config/socket.js";
+import { deleteFromCloudinary } from "../config/cloudinary.js";
 import { sendSuccess, sendError } from "../utils/helpers.js";
 
 // GET /api/admin/stats
@@ -301,12 +302,15 @@ export async function runAudit(req, res) {
       return sendSuccess(res, { matches: [], totalScanned: 0, keywordsCount: 0 });
     }
 
-    // Build regex to match any banned keyword
-    const regex = new RegExp(keywordList.join("|"), "gi");
+    // Escape regex special characters to prevent crash on keywords like "." or "+"
+    const escapedKeywords = keywordList.map((kw) =>
+      kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    );
+    const regexPattern = escapedKeywords.join("|");
 
-    // Find all messages containing banned keywords
+    // Find all non-deleted text messages containing banned keywords
     const messages = await Message.find({
-      text: { $regex: regex, $options: "i" },
+      text: { $regex: regexPattern, $options: "i" },
       isDeleted: false,
     })
       .populate("senderId", "name username photoURL")
@@ -337,16 +341,87 @@ export async function runAudit(req, res) {
   }
 }
 
+// GET /api/admin/gallery — list all shared images (paginated)
+export async function getGallery(req, res) {
+  try {
+    const { page = 1, limit = 40, fileType = "image" } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const filter = {
+      fileUrl: { $ne: null },
+      isDeleted: false,
+    };
+    if (fileType && fileType !== "all") {
+      filter.fileType = fileType;
+    } else {
+      filter.fileType = { $in: ["image", "video", "audio", "document", "other"] };
+    }
+
+    const [files, total] = await Promise.all([
+      Message.find(filter)
+        .populate("senderId", "name username photoURL")
+        .populate("receiverId", "name username")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Message.countDocuments(filter),
+    ]);
+
+    const totalPages = Math.ceil(total / parseInt(limit));
+    sendSuccess(res, { files, totalPages, currentPage: parseInt(page), total });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
+// DELETE /api/admin/gallery/:id — admin delete a shared file message
+export async function adminDeleteFile(req, res) {
+  try {
+    const message = await Message.findById(req.params.id);
+
+    if (!message) return sendError(res, "NOT_FOUND", "File not found", 404);
+
+    // Delete file from Cloudinary if present
+    if (message.publicId) {
+      deleteFromCloudinary(message.publicId).catch(() => {});
+    }
+
+    message.isDeleted = true;
+    message.fileUrl = null;
+    message.fileType = null;
+    message.publicId = null;
+    message.text = "";
+    await message.save();
+
+    const io = getIO();
+    if (io) {
+      io.to(message.receiverId.toString()).emit("message_deleted", { messageId: message._id });
+      io.to(message.senderId.toString()).emit("message_deleted", { messageId: message._id });
+    }
+
+    sendSuccess(res, { message: "File deleted" });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
 // DELETE /api/admin/messages/:id — admin delete any message
 export async function adminDeleteMessage(req, res) {
   try {
-    const message = await Message.findByIdAndUpdate(
-      req.params.id,
-      { isDeleted: true, text: "", fileUrl: null },
-      { new: true }
-    );
+    const message = await Message.findById(req.params.id);
 
     if (!message) return sendError(res, "MESSAGE_NOT_FOUND", "Message not found", 404);
+
+    // Delete file from Cloudinary if present
+    if (message.publicId) {
+      deleteFromCloudinary(message.publicId).catch(() => {});
+    }
+
+    message.isDeleted = true;
+    message.text = "";
+    message.fileUrl = null;
+    message.publicId = null;
+    await message.save();
 
     const io = getIO();
     if (io) {
@@ -379,4 +454,6 @@ export default {
   deleteKeyword,
   runAudit,
   adminDeleteMessage,
+  getGallery,
+  adminDeleteFile,
 };

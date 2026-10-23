@@ -2,6 +2,7 @@ import Message from "../models/Message.js";
 import Chat from "../models/Chat.js";
 import User from "../models/User.js";
 import { getIO } from "../config/socket.js";
+import { deleteFromCloudinary } from "../config/cloudinary.js";
 import logger from "../utils/logger.js";
 
 export default function socketHandler(io, socket) {
@@ -19,7 +20,7 @@ export default function socketHandler(io, socket) {
   // ─── send_message ─────────────────────────────────────────────────────────
   socket.on("send_message", async (data, ack) => {
     try {
-      const { chatId, receiverId, text, fileUrl, fileType } = data;
+      const { chatId, receiverId, text, fileUrl, fileType, publicId } = data;
 
       if (!chatId || !receiverId) {
         if (ack) ack({ success: false, error: "chatId and receiverId required" });
@@ -40,6 +41,7 @@ export default function socketHandler(io, socket) {
         text: text?.trim() || "",
         fileUrl: fileUrl || null,
         fileType: fileType || null,
+        publicId: publicId || null,
       });
 
       // Update chat lastMessage
@@ -156,9 +158,16 @@ export default function socketHandler(io, socket) {
         if (ack) ack({ success: false, error: "Message not found" });
         return;
       }
+      // Delete file from Cloudinary if present
+      if (msg.publicId) {
+        deleteFromCloudinary(msg.publicId).catch((err) =>
+          logger.error("Cloudinary delete error:", err.message)
+        );
+      }
       msg.isDeleted = true;
       msg.text = "";
       msg.fileUrl = null;
+      msg.publicId = null;
       await msg.save();
 
       io.to(msg.receiverId.toString()).emit("message_deleted", { messageId });

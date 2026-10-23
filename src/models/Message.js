@@ -12,6 +12,7 @@ const messageSchema = new mongoose.Schema(
       default: null,
       enum: [null, "image", "video", "audio", "document", "other"],
     },
+    publicId: { type: String, default: null }, // Cloudinary public ID for cleanup on delete
     isEdited: { type: Boolean, default: false },
     isDeleted: { type: Boolean, default: false },
     isSeen: { type: Boolean, default: false },
