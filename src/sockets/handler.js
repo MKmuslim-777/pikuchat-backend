@@ -4,16 +4,21 @@ import User from "../models/User.js";
 import { getIO } from "../config/socket.js";
 import { deleteFromCloudinary } from "../config/cloudinary.js";
 import logger from "../utils/logger.js";
+import { getSocketRoomTargets } from "../utils/socketIds.js";
 
 export default function socketHandler(io, socket) {
   const userId = socket.userId;
-  logger.info(`Socket connected: ${userId}`);
+  const normalizedUserId = getSocketRoomTargets(userId)[0] || "";
+  logger.info(`Socket connected: ${normalizedUserId}`);
 
   // Join personal room for direct messaging
-  socket.join(userId);
+  if (normalizedUserId) socket.join(normalizedUserId);
 
   // Update online status
-  User.findByIdAndUpdate(userId, { isOnline: true, lastSeen: new Date() }).exec();
+  User.findByIdAndUpdate(userId, {
+    isOnline: true,
+    lastSeen: new Date(),
+  }).exec();
   // Notify all other clients this user is online
   socket.broadcast.emit("user_status", { userId, isOnline: true });
 
@@ -23,7 +28,8 @@ export default function socketHandler(io, socket) {
       const { chatId, receiverId, text, fileUrl, fileType, publicId } = data;
 
       if (!chatId || !receiverId) {
-        if (ack) ack({ success: false, error: "chatId and receiverId required" });
+        if (ack)
+          ack({ success: false, error: "chatId and receiverId required" });
         return;
       }
 
@@ -44,6 +50,8 @@ export default function socketHandler(io, socket) {
         publicId: publicId || null,
       });
 
+      const receiverRoom = getSocketRoomTargets(receiverId)[0];
+
       // Update chat lastMessage
       await Chat.findByIdAndUpdate(chatId, {
         lastMessage: {
@@ -56,7 +64,7 @@ export default function socketHandler(io, socket) {
       const messageObj = message.toObject();
 
       // Deliver to receiver's room
-      io.to(receiverId).emit("receive_message", messageObj);
+      if (receiverRoom) io.to(receiverRoom).emit("receive_message", messageObj);
       // Echo back to sender (other tabs / confirmation)
       socket.emit("receive_message", messageObj);
 
@@ -76,8 +84,9 @@ export default function socketHandler(io, socket) {
       const receiverId = chat.participants
         .map((p) => p.toString())
         .find((id) => id !== userId);
-      if (receiverId) {
-        io.to(receiverId).emit("typing_start", { chatId, userId });
+      const targetRoom = getSocketRoomTargets(receiverId)[0];
+      if (targetRoom) {
+        io.to(targetRoom).emit("typing_start", { chatId, userId });
       }
     } catch (error) {
       logger.error("Socket typing_start error:", error.message);
@@ -92,8 +101,9 @@ export default function socketHandler(io, socket) {
       const receiverId = chat.participants
         .map((p) => p.toString())
         .find((id) => id !== userId);
-      if (receiverId) {
-        io.to(receiverId).emit("typing_stop", { chatId, userId });
+      const targetRoom = getSocketRoomTargets(receiverId)[0];
+      if (targetRoom) {
+        io.to(targetRoom).emit("typing_stop", { chatId, userId });
       }
     } catch (error) {
       logger.error("Socket typing_stop error:", error.message);
@@ -105,7 +115,7 @@ export default function socketHandler(io, socket) {
     try {
       await Message.updateMany(
         { chatId, receiverId: userId, isSeen: false },
-        { isSeen: true }
+        { isSeen: true },
       );
 
       const chat = await Chat.findById(chatId).select("participants");
@@ -113,8 +123,9 @@ export default function socketHandler(io, socket) {
       const senderId = chat.participants
         .map((p) => p.toString())
         .find((id) => id !== userId);
-      if (senderId) {
-        io.to(senderId).emit("message_read", { chatId, readBy: userId });
+      const targetRoom = getSocketRoomTargets(senderId)[0];
+      if (targetRoom) {
+        io.to(targetRoom).emit("message_read", { chatId, readBy: userId });
       }
     } catch (error) {
       logger.error("Socket message_read error:", error.message);
@@ -131,17 +142,24 @@ export default function socketHandler(io, socket) {
       }
       const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
       if (msg.createdAt < cutoff) {
-        if (ack) ack({ success: false, error: "Cannot edit messages older than 24 hours" });
+        if (ack)
+          ack({
+            success: false,
+            error: "Cannot edit messages older than 24 hours",
+          });
         return;
       }
       msg.text = text.trim();
       msg.isEdited = true;
       await msg.save();
 
-      io.to(msg.receiverId.toString()).emit("message_edited", {
-        messageId,
-        text: msg.text,
-      });
+      const targetRoom = getSocketRoomTargets(msg.receiverId)[0];
+      if (targetRoom) {
+        io.to(targetRoom).emit("message_edited", {
+          messageId,
+          text: msg.text,
+        });
+      }
       socket.emit("message_edited", { messageId, text: msg.text });
       if (ack) ack({ success: true });
     } catch (error) {
@@ -151,7 +169,8 @@ export default function socketHandler(io, socket) {
   });
 
   // ─── message_delete ───────────────────────────────────────────────────────
-  socket.on("message_delete", async ({ messageId }, ack) => {    try {
+  socket.on("message_delete", async ({ messageId }, ack) => {
+    try {
       const msg = await Message.findOne({ _id: messageId, senderId: userId });
       if (!msg) {
         if (ack) ack({ success: false, error: "Message not found" });
@@ -160,7 +179,7 @@ export default function socketHandler(io, socket) {
       // Delete file from Cloudinary if present
       if (msg.publicId) {
         deleteFromCloudinary(msg.publicId).catch((err) =>
-          logger.error("Cloudinary delete error:", err.message)
+          logger.error("Cloudinary delete error:", err.message),
         );
       }
       msg.isDeleted = true;
@@ -169,7 +188,8 @@ export default function socketHandler(io, socket) {
       msg.publicId = null;
       await msg.save();
 
-      io.to(msg.receiverId.toString()).emit("message_deleted", { messageId });
+      const targetRoom = getSocketRoomTargets(msg.receiverId)[0];
+      if (targetRoom) io.to(targetRoom).emit("message_deleted", { messageId });
       socket.emit("message_deleted", { messageId });
       if (ack) ack({ success: true });
     } catch (error) {
@@ -182,23 +202,29 @@ export default function socketHandler(io, socket) {
   socket.on("message_react", async ({ messageId, emoji }, ack) => {
     try {
       const msg = await Message.findById(messageId);
-      if (!msg) { if (ack) ack({ success: false, error: "Message not found" }); return; }
+      if (!msg) {
+        if (ack) ack({ success: false, error: "Message not found" });
+        return;
+      }
 
       const existing = msg.reactions.find(
-        (r) => r.userId.toString() === userId && r.emoji === emoji
+        (r) => r.userId.toString() === userId && r.emoji === emoji,
       );
       if (existing) {
         msg.reactions = msg.reactions.filter(
-          (r) => !(r.userId.toString() === userId && r.emoji === emoji)
+          (r) => !(r.userId.toString() === userId && r.emoji === emoji),
         );
       } else {
-        msg.reactions = msg.reactions.filter((r) => r.userId.toString() !== userId);
+        msg.reactions = msg.reactions.filter(
+          (r) => r.userId.toString() !== userId,
+        );
         msg.reactions.push({ userId, emoji });
       }
       await msg.save();
 
       const payload = { messageId: msg._id, reactions: msg.reactions };
-      io.to(msg.receiverId.toString()).emit("message_reaction", payload);
+      const targetRoom = getSocketRoomTargets(msg.receiverId)[0];
+      if (targetRoom) io.to(targetRoom).emit("message_reaction", payload);
       socket.emit("message_reaction", payload);
       if (ack) ack({ success: true, reactions: msg.reactions });
     } catch (error) {

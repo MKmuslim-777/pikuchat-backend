@@ -3,6 +3,7 @@ import Chat from "../models/Chat.js";
 import { getIO } from "../config/socket.js";
 import { deleteFromCloudinary } from "../config/cloudinary.js";
 import { sendSuccess, sendError } from "../utils/helpers.js";
+import { getSocketRoomTargets } from "../utils/socketIds.js";
 
 // POST /api/messages — send message (REST fallback)
 export async function sendMessage(req, res) {
@@ -40,7 +41,8 @@ export async function sendMessage(req, res) {
     // Emit via socket
     const io = getIO();
     if (io) {
-      io.to(receiverId).emit("receive_message", message);
+      const targetRoom = getSocketRoomTargets(receiverId)[0];
+      if (targetRoom) io.to(targetRoom).emit("receive_message", message);
     }
 
     sendSuccess(res, { message });
@@ -63,9 +65,15 @@ export async function editMessage(req, res) {
     }
 
     // Can only edit within 24 hours
-    const hoursSinceCreated = (Date.now() - message.createdAt) / (1000 * 60 * 60);
+    const hoursSinceCreated =
+      (Date.now() - message.createdAt) / (1000 * 60 * 60);
     if (hoursSinceCreated > 24) {
-      return sendError(res, "VALIDATION_ERROR", "Cannot edit messages older than 24 hours", 400);
+      return sendError(
+        res,
+        "VALIDATION_ERROR",
+        "Cannot edit messages older than 24 hours",
+        400,
+      );
     }
 
     message.text = text;
@@ -75,10 +83,13 @@ export async function editMessage(req, res) {
     // Emit via socket
     const io = getIO();
     if (io) {
-      io.to(message.receiverId.toString()).emit("message_edited", {
-        messageId: message._id,
-        text: message.text,
-      });
+      const targetRoom = getSocketRoomTargets(message.receiverId)[0];
+      if (targetRoom) {
+        io.to(targetRoom).emit("message_edited", {
+          messageId: message._id,
+          text: message.text,
+        });
+      }
     }
 
     sendSuccess(res, { message });
@@ -113,9 +124,12 @@ export async function deleteMessage(req, res) {
     // Emit via socket
     const io = getIO();
     if (io) {
-      io.to(message.receiverId.toString()).emit("message_deleted", {
-        messageId: message._id,
-      });
+      const targetRoom = getSocketRoomTargets(message.receiverId)[0];
+      if (targetRoom) {
+        io.to(targetRoom).emit("message_deleted", {
+          messageId: message._id,
+        });
+      }
     }
 
     sendSuccess(res, { message: "Message deleted" });
@@ -128,24 +142,27 @@ export async function deleteMessage(req, res) {
 export async function reactToMessage(req, res) {
   try {
     const { emoji } = req.body;
-    if (!emoji) return sendError(res, "VALIDATION_ERROR", "Emoji is required", 400);
+    if (!emoji)
+      return sendError(res, "VALIDATION_ERROR", "Emoji is required", 400);
 
     const message = await Message.findById(req.params.id);
-    if (!message) return sendError(res, "MESSAGE_NOT_FOUND", "Message not found", 404);
+    if (!message)
+      return sendError(res, "MESSAGE_NOT_FOUND", "Message not found", 404);
 
     const existing = message.reactions.find(
-      (r) => r.userId.toString() === req.userId.toString() && r.emoji === emoji
+      (r) => r.userId.toString() === req.userId.toString() && r.emoji === emoji,
     );
 
     if (existing) {
       // Toggle off — remove reaction
       message.reactions = message.reactions.filter(
-        (r) => !(r.userId.toString() === req.userId.toString() && r.emoji === emoji)
+        (r) =>
+          !(r.userId.toString() === req.userId.toString() && r.emoji === emoji),
       );
     } else {
       // Remove any other reaction from this user on this message first (one reaction per user)
       message.reactions = message.reactions.filter(
-        (r) => r.userId.toString() !== req.userId.toString()
+        (r) => r.userId.toString() !== req.userId.toString(),
       );
       message.reactions.push({ userId: req.userId, emoji });
     }
@@ -155,14 +172,18 @@ export async function reactToMessage(req, res) {
     // Emit to both participants
     const io = getIO();
     if (io) {
-      io.to(message.receiverId.toString()).emit("message_reaction", {
-        messageId: message._id,
-        reactions: message.reactions,
-      });
-      io.to(message.senderId.toString()).emit("message_reaction", {
-        messageId: message._id,
-        reactions: message.reactions,
-      });
+      const receiverRoom = getSocketRoomTargets(message.receiverId)[0];
+      const senderRoom = getSocketRoomTargets(message.senderId)[0];
+      if (receiverRoom)
+        io.to(receiverRoom).emit("message_reaction", {
+          messageId: message._id,
+          reactions: message.reactions,
+        });
+      if (senderRoom)
+        io.to(senderRoom).emit("message_reaction", {
+          messageId: message._id,
+          reactions: message.reactions,
+        });
     }
 
     sendSuccess(res, { reactions: message.reactions });

@@ -21,7 +21,8 @@ export async function initSocketServer(httpServer) {
       methods: ["GET", "POST"],
       credentials: true,
     },
-    transports: ["websocket"],
+    transports: ["polling", "websocket"],
+    allowEIO3: true,
   });
 
   // Attach Redis adapter if available
