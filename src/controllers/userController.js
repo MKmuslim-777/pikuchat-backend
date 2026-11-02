@@ -37,25 +37,64 @@ export async function getUserProfile(req, res) {
   }
 }
 
-// PATCH /api/users/profile — update name, username, photoURL, bio, readReceiptsEnabled
+// PATCH /api/users/profile — update name, username, photoURL, bio, readReceiptsEnabled, lastSeenVisibility
 export async function updateProfile(req, res) {
   try {
-    const { name, username, photoURL, bio, readReceiptsEnabled } = req.body;
+    const { name, username, photoURL, bio, readReceiptsEnabled, lastSeenVisibility } = req.body;
     const updates = {};
 
     if (name !== undefined) updates.name = name;
     if (photoURL !== undefined) updates.photoURL = photoURL;
     if (bio !== undefined) updates.bio = bio.slice(0, 150);
     if (readReceiptsEnabled !== undefined) updates.readReceiptsEnabled = readReceiptsEnabled;
-
-    if (username) {
-      const existing = await User.findOne({ username, _id: { $ne: req.userId } });
-      if (existing) return sendError(res, "VALIDATION_ERROR", "Username already taken", 400);
-      updates.username = username;
+    if (lastSeenVisibility !== undefined && ["everyone", "nobody"].includes(lastSeenVisibility)) {
+      updates.lastSeenVisibility = lastSeenVisibility;
     }
 
-    const user = await User.findByIdAndUpdate(req.userId, updates, { new: true })
-      .select("-googleId -mutedChats -hiddenChats -blockedUsers");
+    if (username) {
+      const currentUser = await User.findById(req.userId).select("username usernameHistory");
+
+      // Don't count as change if username is the same
+      if (username !== currentUser.username) {
+        // Check uniqueness
+        const existing = await User.findOne({ username, _id: { $ne: req.userId } });
+        if (existing) return sendError(res, "VALIDATION_ERROR", "Username already taken", 400);
+
+        // Enforce max 3 username changes in 30 days
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const recentChanges = (currentUser.usernameHistory || []).filter(
+          (h) => new Date(h.changedAt) > thirtyDaysAgo
+        );
+        if (recentChanges.length >= 3) {
+          return sendError(
+            res,
+            "RATE_LIMITED",
+            "You can only change your username 3 times in 30 days",
+            429
+          );
+        }
+
+        updates.username = username;
+        // Push old username to history
+        updates.$push = {
+          usernameHistory: { username: currentUser.username, changedAt: new Date() },
+        };
+      }
+    }
+
+    // Separate $set from $push for mongoose
+    const { $push: pushOp, ...setOp } = updates;
+    let user;
+    if (pushOp) {
+      user = await User.findByIdAndUpdate(
+        req.userId,
+        { $set: setOp, $push: pushOp },
+        { new: true }
+      ).select("-googleId -mutedChats -hiddenChats -blockedUsers");
+    } else {
+      user = await User.findByIdAndUpdate(req.userId, setOp, { new: true })
+        .select("-googleId -mutedChats -hiddenChats -blockedUsers");
+    }
 
     sendSuccess(res, { user });
   } catch (error) {
@@ -201,9 +240,51 @@ export async function reportMessage(req, res) {
   }
 }
 
+// GET /api/users/me/activity — message count per day (last 30 days) for graph
+export async function getActivityStats(req, res) {
+  try {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const stats = await Message.aggregate([
+      {
+        $match: {
+          senderId: new (await import("mongoose")).default.Types.ObjectId(req.userId),
+          createdAt: { $gte: thirtyDaysAgo },
+          isDeleted: false,
+        },
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    // Fill in missing days with 0
+    const result = [];
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+      const key = d.toISOString().slice(0, 10);
+      const found = stats.find((s) => s._id === key);
+      result.push({ date: key, count: found ? found.count : 0 });
+    }
+
+    const totalMessages = result.reduce((a, b) => a + b.count, 0);
+    const totalChats = await Message.distinct("chatId", { senderId: req.userId }).then((r) => r.length);
+
+    sendSuccess(res, { daily: result, totalMessages, totalChats });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
 export default {
   searchUsers, getUserProfile, updateProfile, getSettings,
   muteChat, unmuteChat, hideChat, unhideChat,
   getBlockedUsers, blockUser, unblockUser,
-  reportMessage,
+  reportMessage, getActivityStats,
 };

@@ -92,7 +92,41 @@ export async function getMessages(req, res) {
   }
 }
 
-export default { getChats, createChat, getMessages };
+// GET /api/chats/:chatId/export — export chat as plain text (PDF generated client-side)
+export async function exportChat(req, res) {
+  try {
+    const { chatId } = req.params;
+    const chat = await Chat.findOne({ _id: chatId, participants: req.userId }).populate(
+      "participants", "name username"
+    );
+    if (!chat) return sendError(res, "CHAT_NOT_FOUND", "Chat not found", 404);
+
+    const messages = await Message.find({ chatId, isDeleted: false })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    // Build a JSON payload — client renders it as PDF
+    const participants = chat.participants.map((p) => ({
+      id: p._id.toString(), name: p.name, username: p.username,
+    }));
+
+    const formatted = messages.map((m) => ({
+      sender:    participants.find((p) => p.id === m.senderId.toString())?.name || "Unknown",
+      text:      m.text || (m.fileUrl ? `[${m.fileType || "file"}: ${m.fileUrl}]` : ""),
+      createdAt: m.createdAt,
+      isEdited:  m.isEdited,
+    }));
+
+    sendSuccess(res, {
+      chatId,
+      participants,
+      messages: formatted,
+      exportedAt: new Date(),
+    });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
 
 // DELETE /api/chats/:chatId/messages — clear all messages in a chat (for the requesting user)
 export async function clearChatMessages(req, res) {

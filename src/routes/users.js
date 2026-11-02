@@ -6,7 +6,7 @@ import {
   searchUsers, getUserProfile, updateProfile, getSettings,
   muteChat, unmuteChat, hideChat, unhideChat,
   getBlockedUsers, blockUser, unblockUser,
-  reportMessage,
+  reportMessage, getActivityStats,
 } from "../controllers/userController.js";
 
 const router = Router();
@@ -31,6 +31,7 @@ router.delete("/chats/:chatId/hide", authMiddleware, unhideChat);
 
 // Report
 router.post("/messages/:messageId/report", authMiddleware, reportMessage);
+router.get("/me/activity", authMiddleware, getActivityStats);
 
 // Profile lookup (last to avoid matching above patterns)
 router.get("/:id", authMiddleware, getUserProfile);

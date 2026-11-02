@@ -4,7 +4,7 @@ import validate from "../middleware/validate.js";
 import { createChatSchema } from "../validators/chatValidator.js";
 import {
   getChats, createChat, getMessages,
-  clearChatMessages, blockUserInChat, unblockUserInChat, deleteChat,
+  clearChatMessages, blockUserInChat, unblockUserInChat, deleteChat, exportChat,
 } from "../controllers/chatController.js";
 
 const router = Router();
@@ -17,6 +17,7 @@ router.get("/:chatId/messages", getMessages);
 router.delete("/:chatId/messages", clearChatMessages);   // clear all messages
 router.patch("/:chatId/block", blockUserInChat);         // block user
 router.patch("/:chatId/unblock", unblockUserInChat);     // unblock user
-router.delete("/:chatId", deleteChat);                   // delete chat entirely
+router.delete("/:chatId", deleteChat);
+router.get("/:chatId/export", exportChat);                   // delete chat entirely
 
 export default router;
