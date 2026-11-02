@@ -2,10 +2,12 @@ import { verifyToken } from "../utils/helpers.js";
 import User from "../models/User.js";
 
 export default function socketAuthMiddleware(socket, next) {
-  const token = socket.handshake.auth?.token;
+  const token =
+    socket.handshake.auth?.token ||
+    socket.handshake.headers?.authorization?.replace("Bearer ", "");
 
   if (!token) {
-    return next(new Error("Authentication required"));
+    return next(new Error("Authentication required — no token"));
   }
 
   const decoded = verifyToken(token);
@@ -13,19 +15,17 @@ export default function socketAuthMiddleware(socket, next) {
     return next(new Error("Invalid or expired token"));
   }
 
-  // Verify user exists and isn't blocked
   User.findById(decoded.userId)
     .select("-googleId")
+    .lean()                              // plain JS object — faster
     .then((user) => {
-      if (!user) {
-        return next(new Error("User not found"));
-      }
-      if (user.status.isBlocked) {
-        return next(new Error("Account blocked"));
-      }
-      socket.userId = user._id.toString();
-      socket.user = user;
+      if (!user) return next(new Error("User not found"));
+      if (user.status?.isBlocked) return next(new Error("Account blocked"));
+
+      // Attach to socket so handler can use it
+      socket.userId   = user._id.toString();  // always a string
+      socket.userDoc  = user;
       next();
     })
-    .catch(() => next(new Error("Authentication failed")));
+    .catch((err) => next(new Error("Auth DB error: " + err.message)));
 }
