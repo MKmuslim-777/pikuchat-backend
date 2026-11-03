@@ -18,9 +18,16 @@ export const updateProfileSchema = z.object({
       instagram: z.string().optional().or(z.literal("")),
       twitter:   z.string().optional().or(z.literal("")),
       github:    z.string().optional().or(z.literal("")),
+      linkedin:  z.string().optional().or(z.literal("")),
+      tiktok:    z.string().optional().or(z.literal("")),
+      whatsapp:  z.string().optional().or(z.literal("")),
+      telegram:  z.string().optional().or(z.literal("")),
+      youtube:   z.string().optional().or(z.literal("")),
       website:   z.string().optional().or(z.literal("")),
     })
     .optional(),
+  phoneNumber: z.string().max(30).optional().or(z.literal("")),
+  showPhoneNumber: z.boolean().optional(),
 });
 
 export const searchUserSchema = z.object({

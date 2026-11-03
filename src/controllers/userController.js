@@ -38,7 +38,14 @@ export async function getUserProfile(req, res) {
     const user = await User.findOne(query)
       .select("-googleId -mutedChats -hiddenChats -blockedUsers -reportedBy -pushSubscriptions");
     if (!user) return sendError(res, "USER_NOT_FOUND", "User not found", 404);
-    sendSuccess(res, { user });
+
+    const userObj = user.toObject();
+    const isOwner = req.userId && req.userId.toString() === user._id.toString();
+    if (!userObj.showPhoneNumber && !isOwner) {
+      delete userObj.phoneNumber;
+    }
+
+    sendSuccess(res, { user: userObj });
   } catch (error) {
     sendError(res, "SERVER_ERROR", error.message, 500);
   }
@@ -47,13 +54,15 @@ export async function getUserProfile(req, res) {
 // PATCH /api/users/profile — update name, username, photoURL, bio, readReceiptsEnabled, lastSeenVisibility
 export async function updateProfile(req, res) {
   try {
-    const { name, username, photoURL, coverURL, bio, socialLinks, readReceiptsEnabled, lastSeenVisibility } = req.body;
+    const { name, username, photoURL, coverURL, bio, socialLinks, phoneNumber, showPhoneNumber, readReceiptsEnabled, lastSeenVisibility } = req.body;
     const updates = {};
 
     if (name !== undefined) updates.name = name;
     if (photoURL !== undefined) updates.photoURL = photoURL;
     if (coverURL !== undefined) updates.coverURL = coverURL;
     if (socialLinks !== undefined) updates.socialLinks = socialLinks;
+    if (phoneNumber !== undefined) updates.phoneNumber = phoneNumber;
+    if (showPhoneNumber !== undefined) updates.showPhoneNumber = Boolean(showPhoneNumber);
     if (bio !== undefined) updates.bio = bio.slice(0, 150);
     if (readReceiptsEnabled !== undefined) updates.readReceiptsEnabled = readReceiptsEnabled;
     if (lastSeenVisibility !== undefined && ["everyone", "nobody"].includes(lastSeenVisibility)) {
