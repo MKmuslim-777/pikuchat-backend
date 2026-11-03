@@ -9,8 +9,18 @@ export const updateProfileSchema = z.object({
     .regex(/^[a-z0-9_]+$/, "Username must be lowercase alphanumeric + underscore")
     .optional(),
   photoURL: z.string().url().optional().or(z.literal("")),
+  coverURL: z.string().url().optional().or(z.literal("")),
   bio: z.string().max(150, "Bio too long").optional(),
   readReceiptsEnabled: z.boolean().optional(),
+  socialLinks: z
+    .object({
+      facebook:  z.string().optional().or(z.literal("")),
+      instagram: z.string().optional().or(z.literal("")),
+      twitter:   z.string().optional().or(z.literal("")),
+      github:    z.string().optional().or(z.literal("")),
+      website:   z.string().optional().or(z.literal("")),
+    })
+    .optional(),
 });
 
 export const searchUserSchema = z.object({

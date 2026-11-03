@@ -28,8 +28,15 @@ export async function searchUsers(req, res) {
 // GET /api/users/:id
 export async function getUserProfile(req, res) {
   try {
-    const user = await User.findById(req.params.id)
-      .select("-googleId -mutedChats -hiddenChats -blockedUsers -reportedBy");
+    const { id } = req.params;
+    let query;
+    if (id.match(/^[0-9a-fA-F]{24}$/)) {
+      query = { _id: id };
+    } else {
+      query = { username: id.toLowerCase() };
+    }
+    const user = await User.findOne(query)
+      .select("-googleId -mutedChats -hiddenChats -blockedUsers -reportedBy -pushSubscriptions");
     if (!user) return sendError(res, "USER_NOT_FOUND", "User not found", 404);
     sendSuccess(res, { user });
   } catch (error) {
@@ -40,11 +47,13 @@ export async function getUserProfile(req, res) {
 // PATCH /api/users/profile — update name, username, photoURL, bio, readReceiptsEnabled, lastSeenVisibility
 export async function updateProfile(req, res) {
   try {
-    const { name, username, photoURL, bio, readReceiptsEnabled, lastSeenVisibility } = req.body;
+    const { name, username, photoURL, coverURL, bio, socialLinks, readReceiptsEnabled, lastSeenVisibility } = req.body;
     const updates = {};
 
     if (name !== undefined) updates.name = name;
     if (photoURL !== undefined) updates.photoURL = photoURL;
+    if (coverURL !== undefined) updates.coverURL = coverURL;
+    if (socialLinks !== undefined) updates.socialLinks = socialLinks;
     if (bio !== undefined) updates.bio = bio.slice(0, 150);
     if (readReceiptsEnabled !== undefined) updates.readReceiptsEnabled = readReceiptsEnabled;
     if (lastSeenVisibility !== undefined && ["everyone", "nobody"].includes(lastSeenVisibility)) {
@@ -282,9 +291,59 @@ export async function getActivityStats(req, res) {
   }
 }
 
+
+// POST /api/users/push-subscribe
+export async function subscribePush(req, res) {
+  try {
+    const { subscription, device } = req.body;
+    if (!subscription || !subscription.endpoint || !subscription.keys) {
+      return sendError(res, "VALIDATION_ERROR", "Invalid subscription payload", 400);
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) return sendError(res, "USER_NOT_FOUND", "User not found", 404);
+
+    const exists = user.pushSubscriptions?.some((s) => s.endpoint === subscription.endpoint);
+    if (!exists) {
+      user.pushSubscriptions.push({
+        endpoint: subscription.endpoint,
+        keys: {
+          p256dh: subscription.keys.p256dh,
+          auth: subscription.keys.auth,
+        },
+        device: device || "browser",
+      });
+      await user.save();
+    }
+
+    sendSuccess(res, { subscribed: true });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
+// POST /api/users/push-unsubscribe
+export async function unsubscribePush(req, res) {
+  try {
+    const { endpoint } = req.body;
+    if (!endpoint) {
+      return sendError(res, "VALIDATION_ERROR", "Endpoint required", 400);
+    }
+
+    await User.findByIdAndUpdate(req.userId, {
+      $pull: { pushSubscriptions: { endpoint } },
+    });
+
+    sendSuccess(res, { unsubscribed: true });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
 export default {
   searchUsers, getUserProfile, updateProfile, getSettings,
   muteChat, unmuteChat, hideChat, unhideChat,
   getBlockedUsers, blockUser, unblockUser,
-  reportMessage, getActivityStats,
+  reportMessage, getActivityStats, subscribePush, unsubscribePush,
+
 };

@@ -6,11 +6,19 @@ const userSchema = new mongoose.Schema(
     email:    { type: String, required: true, unique: true },
     username: { type: String, required: true, unique: true, lowercase: true },
     photoURL: { type: String },
+    coverURL: { type: String, default: "" }, // Custom banner/cover
     bio:      { type: String, default: "", maxlength: 150 },
     role: {
       type: String,
       enum: ["user", "elite_user", "super_admin"],
       default: "user",
+    },
+    socialLinks: {
+      facebook:  { type: String, default: "" },
+      instagram: { type: String, default: "" },
+      twitter:   { type: String, default: "" },
+      github:    { type: String, default: "" },
+      website:   { type: String, default: "" },
     },
     isProtectedFromDeletion: { type: Boolean, default: false },
     status: {
@@ -30,6 +38,19 @@ const userSchema = new mongoose.Schema(
       {
         username:  { type: String },
         changedAt: { type: Date, default: Date.now },
+      },
+    ],
+
+    // Web Push Subscriptions for mobile background notifications
+    pushSubscriptions: [
+      {
+        endpoint: { type: String, required: true },
+        keys: {
+          p256dh: { type: String, required: true },
+          auth:   { type: String, required: true },
+        },
+        device: { type: String, default: "browser" },
+        createdAt: { type: Date, default: Date.now },
       },
     ],
 
@@ -57,5 +78,6 @@ const userSchema = new mongoose.Schema(
 
 userSchema.index({ role: 1 });
 userSchema.index({ "mutedChats.chatId": 1 });
+userSchema.index({ "pushSubscriptions.endpoint": 1 });
 
 export default mongoose.model("User", userSchema);

@@ -7,6 +7,7 @@ import {
   muteChat, unmuteChat, hideChat, unhideChat,
   getBlockedUsers, blockUser, unblockUser,
   reportMessage, getActivityStats,
+  subscribePush, unsubscribePush,
 } from "../controllers/userController.js";
 
 const router = Router();
@@ -14,9 +15,11 @@ const router = Router();
 // Public-ish (auth required)
 router.get("/search", authMiddleware, validate(searchUserSchema, "query"), searchUsers);
 
-// Settings
+// Settings & Push Notifications
 router.get("/me/settings", authMiddleware, getSettings);
 router.patch("/profile", authMiddleware, validate(updateProfileSchema), updateProfile);
+router.post("/push-subscribe", authMiddleware, subscribePush);
+router.post("/push-unsubscribe", authMiddleware, unsubscribePush);
 
 // Blocked users
 router.get("/blocked", authMiddleware, getBlockedUsers);
@@ -29,11 +32,11 @@ router.delete("/chats/:chatId/mute", authMiddleware, unmuteChat);
 router.patch("/chats/:chatId/hide", authMiddleware, hideChat);
 router.delete("/chats/:chatId/hide", authMiddleware, unhideChat);
 
-// Report
+// Report & Activity
 router.post("/messages/:messageId/report", authMiddleware, reportMessage);
 router.get("/me/activity", authMiddleware, getActivityStats);
 
-// Profile lookup (last to avoid matching above patterns)
+// Profile lookup (by _id or username, last to avoid matching above patterns)
 router.get("/:id", authMiddleware, getUserProfile);
 
 export default router;
