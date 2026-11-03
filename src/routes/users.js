@@ -1,5 +1,5 @@
 import { Router } from "express";
-import authMiddleware from "../middleware/auth.js";
+import authMiddleware, { optionalAuth } from "../middleware/auth.js";
 import validate from "../middleware/validate.js";
 import { updateProfileSchema, searchUserSchema } from "../validators/userValidator.js";
 import {
@@ -37,6 +37,7 @@ router.post("/messages/:messageId/report", authMiddleware, reportMessage);
 router.get("/me/activity", authMiddleware, getActivityStats);
 
 // Profile lookup (by _id or username, last to avoid matching above patterns)
-router.get("/:id", authMiddleware, getUserProfile);
+// Public access: can be viewed without login
+router.get("/:id", optionalAuth, getUserProfile);
 
 export default router;

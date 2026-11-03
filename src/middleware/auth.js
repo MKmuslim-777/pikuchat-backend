@@ -51,4 +51,24 @@ export async function authMiddleware(req, res, next) {
   }
 }
 
+export async function optionalAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return next();
+  }
+
+  const token = authHeader.split(" ")[1];
+  const decoded = verifyToken(token);
+  if (!decoded) return next();
+
+  try {
+    const user = await User.findById(decoded.userId).select("-googleId");
+    if (user && !user.status?.isBlocked) {
+      req.user = user;
+      req.userId = user._id;
+    }
+  } catch {}
+  next();
+}
+
 export default authMiddleware;
