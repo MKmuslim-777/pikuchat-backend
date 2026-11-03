@@ -33,7 +33,7 @@ export default function socketHandler(io, socket) {
   // ── send_message ──────────────────────────────────────────────────────────
   socket.on("send_message", async (data, ack) => {
     try {
-      const { chatId, receiverId, text, fileUrl, fileType, publicId, replyTo } = data;
+      const { chatId, receiverId, text, fileUrl, fileType, publicId, replyTo, voiceDuration } = data;
 
       if (!chatId || !receiverId) {
         return ack?.({ success: false, error: "chatId and receiverId are required" });
