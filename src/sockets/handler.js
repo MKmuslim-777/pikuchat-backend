@@ -53,6 +53,7 @@ export default function socketHandler(io, socket) {
         text:       text?.trim() || "",
         fileUrl:    fileUrl  || null,
         fileType:   fileType || null,
+        voiceDuration: voiceDuration ? Number(voiceDuration) : 0,
         publicId:   publicId || null,
         replyTo:    replyTo?.text || replyTo?._id
           ? {
@@ -67,7 +68,7 @@ export default function socketHandler(io, socket) {
       // Update chat's lastMessage
       await Chat.findByIdAndUpdate(chatId, {
         lastMessage: {
-          text:      text?.trim() || (fileUrl ? "📎 File" : ""),
+          text:      text?.trim() || (fileType === "voice" || fileType === "audio" ? "🎤 Voice message" : (fileUrl ? "📎 File" : "")),
           senderId:  userId,
           updatedAt: new Date(),
         },

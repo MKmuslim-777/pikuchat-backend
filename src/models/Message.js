@@ -17,8 +17,9 @@ const messageSchema = new mongoose.Schema(
     fileUrl:    { type: String, default: null },
     fileType: {
       type: String, default: null,
-      enum: [null, "image", "video", "audio", "document", "other"],
+      enum: [null, "image", "video", "audio", "voice", "document", "other"],
     },
+    voiceDuration: { type: Number, default: 0 }, // in seconds
     publicId:  { type: String, default: null },
     replyTo: {
       _id:      { type: mongoose.Schema.Types.ObjectId },

@@ -8,7 +8,7 @@ import { getSocketRoomTargets } from "../utils/socketIds.js";
 // POST /api/messages — send message (REST fallback)
 export async function sendMessage(req, res) {
   try {
-    const { chatId, receiverId, text, fileUrl, fileType, publicId } = req.body;
+    const { chatId, receiverId, text, fileUrl, fileType, voiceDuration, publicId } = req.body;
 
     // Verify chat belongs to sender
     const chat = await Chat.findOne({
@@ -27,12 +27,13 @@ export async function sendMessage(req, res) {
       text: text || "",
       fileUrl: fileUrl || null,
       fileType: fileType || null,
+      voiceDuration: voiceDuration ? Number(voiceDuration) : 0,
       publicId: publicId || null,
     });
 
     // Update chat lastMessage
     chat.lastMessage = {
-      text: text || (fileUrl ? "📎 File" : ""),
+      text: text || (fileType === "voice" || fileType === "audio" ? "🎤 Voice message" : (fileUrl ? "📎 File" : "")),
       senderId: req.userId,
       updatedAt: new Date(),
     };
