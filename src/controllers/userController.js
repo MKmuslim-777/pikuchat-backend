@@ -2,6 +2,7 @@ import User from "../models/User.js";
 import Message from "../models/Message.js";
 import { sendSuccess, sendError } from "../utils/helpers.js";
 import { getIO } from "../config/socket.js";
+import { deleteCloudinaryUrl } from "../config/cloudinary.js";
 
 // GET /api/users/search?query=
 export async function searchUsers(req, res) {
@@ -57,9 +58,11 @@ export async function updateProfile(req, res) {
     const { name, username, photoURL, coverURL, bio, socialLinks, phoneNumber, showPhoneNumber, readReceiptsEnabled, lastSeenVisibility } = req.body;
     const updates = {};
 
+    // Fetch existing user to handle Cloudinary cleanup and username rules
+    const currentUser = await User.findById(req.userId).select("username usernameHistory photoURL coverURL");
+    if (!currentUser) return sendError(res, "USER_NOT_FOUND", "User not found", 404);
+
     if (name !== undefined) updates.name = name;
-    if (photoURL !== undefined) updates.photoURL = photoURL;
-    if (coverURL !== undefined) updates.coverURL = coverURL;
     if (socialLinks !== undefined) updates.socialLinks = socialLinks;
     if (phoneNumber !== undefined) updates.phoneNumber = phoneNumber;
     if (showPhoneNumber !== undefined) updates.showPhoneNumber = Boolean(showPhoneNumber);
@@ -69,8 +72,23 @@ export async function updateProfile(req, res) {
       updates.lastSeenVisibility = lastSeenVisibility;
     }
 
+    // Automatically delete old Cloudinary profile pic when a new one is uploaded
+    if (photoURL !== undefined) {
+      updates.photoURL = photoURL;
+      if (currentUser.photoURL && currentUser.photoURL !== photoURL) {
+        deleteCloudinaryUrl(currentUser.photoURL).catch(() => {});
+      }
+    }
+
+    // Automatically delete old Cloudinary cover banner when a new one is uploaded
+    if (coverURL !== undefined) {
+      updates.coverURL = coverURL;
+      if (currentUser.coverURL && currentUser.coverURL !== coverURL) {
+        deleteCloudinaryUrl(currentUser.coverURL).catch(() => {});
+      }
+    }
+
     if (username) {
-      const currentUser = await User.findById(req.userId).select("username usernameHistory");
 
       // Don't count as change if username is the same
       if (username !== currentUser.username) {
