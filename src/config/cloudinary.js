@@ -45,25 +45,46 @@ export function uploadToCloudinary(fileBuffer, folder = "piku") {
 /**
  * Uploads voice and audio messages exclusively to the dedicated audio Cloudinary account ("pikuchataudio")
  */
-export function uploadAudioToCloudinary(fileBuffer, folder = "piku_voice") {
-  return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      {
-        ...AUDIO_CLOUDINARY_CONFIG,
-        folder,
-        resource_type: "video", // Cloudinary processes audio under the video resource_type
-      },
-      (error, result) => {
-        if (error) {
-          logger.error("Cloudinary audio upload error:", error.message);
-          reject(error);
-        } else {
-          resolve(result);
+export async function uploadAudioToCloudinary(fileBuffer, folder = "piku_voice") {
+  try {
+    return await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          ...AUDIO_CLOUDINARY_CONFIG,
+          folder,
+          resource_type: "video", // Cloudinary processes audio under the video resource_type
+        },
+        (error, result) => {
+          if (error) {
+            logger.error("Dedicated audio Cloudinary error:", error.message);
+            reject(error);
+          } else {
+            resolve(result);
+          }
         }
-      }
-    );
-    uploadStream.end(fileBuffer);
-  });
+      );
+      uploadStream.end(fileBuffer);
+    });
+  } catch (audioErr) {
+    logger.warn("Falling back to primary Cloudinary for audio message due to:", audioErr.message);
+    return await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder,
+          resource_type: "video",
+        },
+        (error, result) => {
+          if (error) {
+            logger.error("Primary Cloudinary audio upload fallback failed:", error.message);
+            reject(error);
+          } else {
+            resolve(result);
+          }
+        }
+      );
+      uploadStream.end(fileBuffer);
+    });
+  }
 }
 
 export function deleteFromCloudinary(publicId, isAudio = false) {
