@@ -170,6 +170,44 @@ export async function unmuteUser(req, res) {
   }
 }
 
+// PATCH /api/admin/users/:id/role — change user role (super_admin only)
+export async function changeUserRole(req, res) {
+  try {
+    const { role } = req.body;
+    const allowedRoles = ["user", "elite_user", "super_admin"];
+
+    if (!role || !allowedRoles.includes(role)) {
+      return sendError(
+        res,
+        "VALIDATION_ERROR",
+        "Invalid role. Must be 'user', 'elite_user', or 'super_admin'",
+        400
+      );
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { role },
+      { new: true }
+    ).select("-googleId");
+
+    if (!user) return sendError(res, "USER_NOT_FOUND", "User not found", 404);
+
+    // Notify user in real-time via socket if online
+    const io = getIO();
+    if (io) {
+      io.to(req.params.id).emit("role_changed", {
+        userId: user._id,
+        role: user.role,
+      });
+    }
+
+    sendSuccess(res, { user });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
 // GET /api/admin/chats — list all chats
 export async function getAllChats(req, res) {
   try {
