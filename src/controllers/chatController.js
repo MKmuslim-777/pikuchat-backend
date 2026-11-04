@@ -23,7 +23,11 @@ export async function getChats(req, res) {
 // POST /api/chats — create or get existing 1-on-1 chat
 export async function createChat(req, res) {
   try {
-    const { userId } = req.body;
+    const targetUserId = req.body.userId || req.body.recipientId;
+    if (!targetUserId) {
+      return sendError(res, "VALIDATION_ERROR", "userId is required", 400);
+    }
+    const userId = targetUserId;
 
     // Check if a chat already exists between these two users
     let chat = await Chat.findOne({
