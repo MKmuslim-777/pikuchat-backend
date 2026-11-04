@@ -33,7 +33,7 @@ export default function socketHandler(io, socket) {
   // ── send_message ──────────────────────────────────────────────────────────
   socket.on("send_message", async (data, ack) => {
     try {
-      const { chatId, receiverId, text, fileUrl, fileType, publicId, replyTo, voiceDuration } = data;
+      const { chatId, receiverId, text, fileUrl, fileType, publicId, replyTo, voiceDuration, isViewOnce } = data;
 
       if (!chatId || !receiverId) {
         return ack?.({ success: false, error: "chatId and receiverId are required" });
@@ -55,6 +55,8 @@ export default function socketHandler(io, socket) {
         fileType:   fileType || null,
         voiceDuration: voiceDuration ? Number(voiceDuration) : 0,
         publicId:   publicId || null,
+        isViewOnce: !!isViewOnce,
+        isViewed:   false,
         replyTo:    replyTo?.text || replyTo?._id
           ? {
               _id:      replyTo._id,
@@ -119,6 +121,26 @@ export default function socketHandler(io, socket) {
       if (otherId) io.to(otherId).emit("message_read", { chatId, readBy: userId });
     } catch (err) {
       logger.error("message_read error:", err.message);
+    }
+  });
+
+  // ── message_viewed_once ───────────────────────────────────────────────────
+  socket.on("message_viewed_once", async ({ messageId }, ack) => {
+    try {
+      const msg = await Message.findById(messageId);
+      if (!msg) return ack?.({ success: false, error: "Message not found" });
+      if (!msg.isViewOnce) return ack?.({ success: false, error: "Not a view-once message" });
+
+      msg.isViewed = true;
+      await msg.save();
+
+      const payload = { messageId: msg._id, chatId: msg.chatId, isViewed: true };
+      io.to(msg.senderId.toString()).emit("message_viewed_once", payload);
+      io.to(msg.receiverId.toString()).emit("message_viewed_once", payload);
+      ack?.({ success: true });
+    } catch (err) {
+      logger.error("message_viewed_once error:", err.message);
+      ack?.({ success: false, error: err.message });
     }
   });
 
