@@ -59,11 +59,13 @@ export async function updateProfile(req, res) {
     const updates = {};
 
     // Fetch existing user to handle Cloudinary cleanup and username rules
-    const currentUser = await User.findById(req.userId).select("username usernameHistory photoURL coverURL");
+    const currentUser = await User.findById(req.userId).select("username usernameHistory photoURL coverURL socialLinks");
     if (!currentUser) return sendError(res, "USER_NOT_FOUND", "User not found", 404);
 
     if (name !== undefined) updates.name = name;
-    if (socialLinks !== undefined) updates.socialLinks = socialLinks;
+    if (socialLinks !== undefined) {
+      updates.socialLinks = { ...currentUser.toObject().socialLinks, ...socialLinks };
+    }
     if (phoneNumber !== undefined) updates.phoneNumber = phoneNumber;
     if (showPhoneNumber !== undefined) updates.showPhoneNumber = Boolean(showPhoneNumber);
     if (bio !== undefined) updates.bio = bio.slice(0, 150);
