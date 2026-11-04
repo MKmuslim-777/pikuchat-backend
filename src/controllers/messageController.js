@@ -4,6 +4,7 @@ import { getIO } from "../config/socket.js";
 import { deleteFromCloudinary } from "../config/cloudinary.js";
 import { sendSuccess, sendError } from "../utils/helpers.js";
 import { getSocketRoomTargets } from "../utils/socketIds.js";
+import { sendPushNotification } from "../utils/pushNotifier.js";
 
 // POST /api/messages — send message (REST fallback)
 export async function sendMessage(req, res) {
@@ -20,10 +21,20 @@ export async function sendMessage(req, res) {
       return sendError(res, "CHAT_NOT_FOUND", "Chat not found", 404);
     }
 
+    const recipientId = receiverId?.toString();
+    const participantIds = chat.participants.map((participant) => participant.toString());
+    if (
+      !recipientId ||
+      recipientId === req.userId.toString() ||
+      !participantIds.includes(recipientId)
+    ) {
+      return sendError(res, "VALIDATION_ERROR", "Invalid chat recipient", 400);
+    }
+
     const message = await Message.create({
       chatId,
       senderId: req.userId,
-      receiverId,
+      receiverId: recipientId,
       text: text || "",
       fileUrl: fileUrl || null,
       fileType: fileType || null,
@@ -42,9 +53,31 @@ export async function sendMessage(req, res) {
     // Emit via socket
     const io = getIO();
     if (io) {
-      const targetRoom = getSocketRoomTargets(receiverId)[0];
+      const targetRoom = getSocketRoomTargets(recipientId)[0];
       if (targetRoom) io.to(targetRoom).emit("receive_message", message);
     }
+
+    const notificationBody = text?.trim()
+      ? text.trim().slice(0, 120)
+      : fileType === "voice" || fileType === "audio"
+        ? "Sent you a voice message"
+        : fileType === "image"
+          ? "Sent you a photo"
+          : fileUrl
+            ? "Sent you a file"
+            : "Sent you a message";
+    void sendPushNotification(
+      recipientId,
+      {
+        title: req.user?.name || "New message",
+        body: notificationBody,
+        icon: req.user?.photoURL || "/favicon.ico",
+        chatId: chatId.toString(),
+        tag: `piku-msg-${chatId}-${message._id}`,
+        data: { url: `/chat/${chatId}`, chatId: chatId.toString() },
+      },
+      io,
+    );
 
     sendSuccess(res, { message });
   } catch (error) {

@@ -15,15 +15,36 @@ if (publicVapidKey && privateVapidKey) {
 /**
  * Send a web push notification to a user across all their registered devices
  * @param {string} userId
- * @param {{ title: string, body: string, icon?: string, data?: object, tag?: string }} payload
+ * @param {{ title: string, body: string, icon?: string, data?: object, tag?: string, chatId?: string }} payload
+ * @param {import("socket.io").Server} [io]
  */
-export async function sendPushNotification(userId, payload) {
+export async function sendPushNotification(userId, payload, io) {
   if (!publicVapidKey || !privateVapidKey) return;
 
   try {
-    const user = await User.findById(userId).select("pushSubscriptions status");
+    const user = await User.findById(userId).select("pushSubscriptions status mutedChats");
     if (!user || user.status?.isBlocked || !user.pushSubscriptions?.length) {
       return;
+    }
+
+    if (payload.chatId) {
+      const isMuted = user.mutedChats?.some((mute) => {
+        const mutedChatId = mute.chatId?._id || mute.chatId;
+        return (
+          mutedChatId?.toString() === payload.chatId.toString() &&
+          (!mute.mutedUntil || new Date(mute.mutedUntil) > new Date())
+        );
+      });
+      if (isMuted) return;
+    }
+
+    if (io?.in) {
+      try {
+        const connectedSockets = await io.in(userId.toString()).fetchSockets();
+        if (connectedSockets.length > 0) return;
+      } catch (error) {
+        logger.warn(`Could not check active sessions for push recipient ${userId}: ${error.message}`);
+      }
     }
 
     const notificationPayload = JSON.stringify({
@@ -32,7 +53,7 @@ export async function sendPushNotification(userId, payload) {
       icon: payload.icon || "/favicon.ico",
       badge: "/favicon.ico",
       tag: payload.tag || "piku-msg",
-      data: payload.data || { url: "/chat" },
+      data: payload.data || { url: payload.chatId ? `/chat/${payload.chatId}` : "/chat" },
       vibrate: [100, 50, 100],
     });
 
@@ -74,4 +95,3 @@ export async function sendPushNotification(userId, payload) {
     logger.error(`Error in sendPushNotification for ${userId}: ${err.message}`);
   }
 }
-

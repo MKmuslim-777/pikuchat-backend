@@ -40,9 +40,19 @@ export default function socketHandler(io, socket) {
       }
 
       // Verify sender is a participant
-      const chat = await Chat.findOne({ _id: chatId, participants: userId }).lean();
+      const chat = await Chat.findOne({ _id: chatId, participants: userId })
+        .select("participants")
+        .lean();
       if (!chat) {
         return ack?.({ success: false, error: "Chat not found or access denied" });
+      }
+
+      const chatParticipants = chat.participants.map((participant) => participant.toString());
+      if (
+        receiverId.toString() === userId ||
+        !chatParticipants.includes(receiverId.toString())
+      ) {
+        return ack?.({ success: false, error: "Invalid chat recipient" });
       }
 
       // Persist message
@@ -82,6 +92,30 @@ export default function socketHandler(io, socket) {
       io.to(receiverId.toString()).emit("receive_message", msgObj);
       // Echo back to sender's other sessions/tabs
       socket.emit("receive_message", msgObj);
+
+      const notificationBody = isViewOnce
+        ? "Sent you a view-once message"
+        : text?.trim()
+          ? text.trim().slice(0, 120)
+          : fileType === "voice" || fileType === "audio"
+            ? "Sent you a voice message"
+            : fileType === "image"
+              ? "Sent you a photo"
+              : fileUrl
+                ? "Sent you a file"
+                : "Sent you a message";
+      void sendPushNotification(
+        receiverId.toString(),
+        {
+          title: socket.userDoc?.name || "New message",
+          body: notificationBody,
+          icon: socket.userDoc?.photoURL || "/favicon.ico",
+          chatId: chatId.toString(),
+          tag: `piku-msg-${chatId}-${message._id}`,
+          data: { url: `/chat/${chatId}`, chatId: chatId.toString() },
+        },
+        io,
+      );
 
       ack?.({ success: true, message: msgObj });
     } catch (err) {
