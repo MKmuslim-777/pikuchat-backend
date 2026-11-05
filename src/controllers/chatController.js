@@ -4,6 +4,69 @@ import User from "../models/User.js";
 import { getIO } from "../config/socket.js";
 import { sendSuccess, sendError } from "../utils/helpers.js";
 
+const idOf = (value) => value?._id?.toString() || value?.toString();
+
+async function ensureGroupAdmin(chat) {
+  if (!chat.isGroup || chat.admins?.length) return chat;
+  const firstParticipantId = idOf(chat.participants?.[0]);
+  if (!firstParticipantId) return chat;
+
+  const updated = await Chat.findOneAndUpdate(
+    {
+      _id: chat._id,
+      $or: [{ admins: { $exists: false } }, { admins: { $size: 0 } }],
+    },
+    { $set: { admins: [firstParticipantId] } },
+    { new: true },
+  ).select("admins");
+  if (updated?.admins?.length) {
+    chat.admins = updated.admins;
+  } else {
+    const latest = await Chat.findById(chat._id).select("admins");
+    chat.admins = latest?.admins?.length ? latest.admins : [firstParticipantId];
+  }
+  return chat;
+}
+
+function isGroupAdmin(chat, userId) {
+  const adminIds = chat.admins?.length
+    ? chat.admins.map(idOf)
+    : [idOf(chat.participants?.[0])];
+  return adminIds.includes(userId.toString());
+}
+
+async function getAdminGroup(req, res) {
+  const chat = await Chat.findOne({
+    _id: req.params.chatId,
+    isGroup: true,
+    participants: req.userId,
+  });
+  if (!chat) {
+    sendError(res, "CHAT_NOT_FOUND", "Group not found", 404);
+    return null;
+  }
+
+  await ensureGroupAdmin(chat);
+  if (!isGroupAdmin(chat, req.userId)) {
+    sendError(res, "GROUP_ADMIN_REQUIRED", "Only group admins can manage members or profile", 403);
+    return null;
+  }
+  return chat;
+}
+
+async function emitGroupUpdated(io, chatId) {
+  if (!io) return;
+  const chat = await Chat.findById(chatId).populate({
+    path: "participants",
+    select: "name username photoURL isOnline lastSeen role status",
+  });
+  if (!chat) return;
+  const payload = { chat };
+  for (const participant of chat.participants) {
+    io.to(idOf(participant)).emit("group_updated", payload);
+  }
+}
+
 // GET /api/chats — get all chats for current user
 export async function getChats(req, res) {
   try {
@@ -14,6 +77,9 @@ export async function getChats(req, res) {
       })
       .sort({ "lastMessage.updatedAt": -1 });
 
+    for (const chat of chats) {
+      if (chat.isGroup) await ensureGroupAdmin(chat);
+    }
     sendSuccess(res, { chats });
   } catch (error) {
     sendError(res, "SERVER_ERROR", error.message, 500);
@@ -115,6 +181,7 @@ export async function createGroup(req, res) {
       name: req.body.name,
       isGroup: true,
       participants: memberIds,
+      admins: [req.userId],
     });
 
     const chat = await Chat.findById(createdChat._id).populate({
@@ -138,6 +205,229 @@ export async function createGroup(req, res) {
         { $inc: { groupChatCount: -1 } },
       );
     }
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
+// POST /api/chats/:chatId/members — add members (admins only)
+export async function addGroupMembers(req, res) {
+  const requestedIds = req.body.userIds.map((id) => id.toString());
+  const reservedIds = [];
+  try {
+    const chat = await getAdminGroup(req, res);
+    if (!chat) return;
+    const currentIds = chat.participants.map(idOf);
+    if (requestedIds.some((id) => currentIds.includes(id))) {
+      return sendError(res, "GROUP_MEMBER_EXISTS", "One or more users are already in this group", 409);
+    }
+
+    const users = await User.find({
+      _id: { $in: requestedIds },
+      "status.isBlocked": { $ne: true },
+    }).select("_id blockedUsers");
+    if (users.length !== requestedIds.length) {
+      return sendError(res, "USER_NOT_FOUND", "One or more selected users are unavailable", 400);
+    }
+
+    const existingUsers = await User.find({ _id: { $in: currentIds } }).select("_id blockedUsers");
+    const allUsers = [...existingUsers, ...users];
+    const requestedSet = new Set(requestedIds);
+    const currentSet = new Set(currentIds);
+    const hasBlockedPair = allUsers.some((member) =>
+      (member.blockedUsers || []).some((blockedId) => {
+        const blocked = blockedId.toString();
+        return (
+          (requestedSet.has(member._id.toString()) && currentSet.has(blocked)) ||
+          (currentSet.has(member._id.toString()) && requestedSet.has(blocked))
+        );
+      })
+    );
+    if (hasBlockedPair) {
+      return sendError(res, "GROUP_MEMBER_BLOCKED", "A selected member cannot be added to this group", 400);
+    }
+
+    for (const memberId of requestedIds) {
+      const reserved = await User.findOneAndUpdate(
+        {
+          _id: memberId,
+          $or: [
+            { groupChatCount: { $lt: 3 } },
+            { groupChatCount: { $exists: false } },
+          ],
+        },
+        { $inc: { groupChatCount: 1 } },
+        { new: true, projection: { _id: 1 } },
+      );
+      if (!reserved) {
+        await User.updateMany({ _id: { $in: reservedIds } }, { $inc: { groupChatCount: -1 } });
+        return sendError(
+          res,
+          "GROUP_LIMIT_REACHED",
+          "Every member can be in at most 3 groups. Remove someone from a group before adding another.",
+          409,
+        );
+      }
+      reservedIds.push(memberId);
+    }
+
+    const updated = await Chat.findOneAndUpdate(
+      {
+        _id: chat._id,
+        isGroup: true,
+        $and: [
+          { participants: req.userId },
+          { admins: req.userId },
+          { participants: { $nin: requestedIds } },
+        ],
+      },
+      { $addToSet: { participants: { $each: requestedIds } } },
+      { new: true },
+    );
+    if (!updated) {
+      await User.updateMany({ _id: { $in: reservedIds } }, { $inc: { groupChatCount: -1 } });
+      return sendError(res, "GROUP_CHANGED", "The group changed. Refresh and try again.", 409);
+    }
+    reservedIds.length = 0;
+    await emitGroupUpdated(getIO(), chat._id);
+    const populatedChat = await Chat.findById(chat._id).populate({
+      path: "participants",
+      select: "name username photoURL isOnline lastSeen role status",
+    });
+    sendSuccess(res, { chat: populatedChat });
+  } catch (error) {
+    if (reservedIds.length) {
+      await User.updateMany({ _id: { $in: reservedIds } }, { $inc: { groupChatCount: -1 } });
+    }
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
+// DELETE /api/chats/:chatId/members/:userId — remove a member (admins only)
+export async function removeGroupMember(req, res) {
+  try {
+    const targetId = req.params.userId;
+    if (!/^[0-9a-f]{24}$/i.test(targetId)) {
+      return sendError(res, "VALIDATION_ERROR", "Invalid user ID", 400);
+    }
+    if (targetId === req.userId.toString()) {
+      return sendError(res, "VALIDATION_ERROR", "Use Leave Group to remove yourself", 400);
+    }
+
+    const chat = await getAdminGroup(req, res);
+    if (!chat) return;
+    if (!chat.participants.some((id) => idOf(id) === targetId)) {
+      return sendError(res, "USER_NOT_FOUND", "User is not a member of this group", 404);
+    }
+    const adminIds = (chat.admins?.length ? chat.admins : [chat.participants[0]]).map(idOf);
+    if (adminIds.includes(targetId) && adminIds.length === 1) {
+      return sendError(res, "LAST_GROUP_ADMIN", "Promote another member before removing the only admin", 409);
+    }
+
+    const updated = await Chat.findOneAndUpdate(
+      {
+        _id: chat._id,
+        isGroup: true,
+        $and: [
+          { participants: req.userId },
+          { admins: req.userId },
+          { participants: targetId },
+          {
+            $or: [
+              { admins: { $ne: targetId } },
+              { $expr: { $gt: [{ $size: "$admins" }, 1] } },
+            ],
+          },
+        ],
+      },
+      { $pull: { participants: targetId, admins: targetId } },
+      { new: true },
+    );
+    if (!updated) return sendError(res, "GROUP_CHANGED", "The group changed. Refresh and try again.", 409);
+
+    await User.updateOne(
+      { _id: targetId, groupChatCount: { $gt: 0 } },
+      { $inc: { groupChatCount: -1 } },
+    );
+    const io = getIO();
+    io?.to(targetId).emit("group_member_removed", { chatId: chat._id.toString() });
+    await emitGroupUpdated(io, chat._id);
+    const populatedChat = await Chat.findById(chat._id).populate({
+      path: "participants",
+      select: "name username photoURL isOnline lastSeen role status",
+    });
+    sendSuccess(res, { chat: populatedChat });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
+// PATCH /api/chats/:chatId/members/:userId/admin — change a member's admin role
+export async function updateGroupAdmin(req, res) {
+  try {
+    const targetId = req.params.userId;
+    if (!/^[0-9a-f]{24}$/i.test(targetId)) {
+      return sendError(res, "VALIDATION_ERROR", "Invalid user ID", 400);
+    }
+    const chat = await getAdminGroup(req, res);
+    if (!chat) return;
+    if (!chat.participants.some((id) => idOf(id) === targetId)) {
+      return sendError(res, "USER_NOT_FOUND", "User is not a member of this group", 404);
+    }
+    const isAdmin = req.body.isAdmin;
+    const adminIds = (chat.admins?.length ? chat.admins : [chat.participants[0]]).map(idOf);
+    if (!isAdmin && adminIds.includes(targetId) && adminIds.length === 1) {
+      return sendError(res, "LAST_GROUP_ADMIN", "A group must have at least one admin", 409);
+    }
+    const updateResult = await Chat.updateOne(
+      {
+        _id: chat._id,
+        isGroup: true,
+        admins: req.userId,
+        participants: targetId,
+        ...(isAdmin ? {} : {
+          $or: [
+            { admins: { $ne: targetId } },
+            { $expr: { $gt: [{ $size: "$admins" }, 1] } },
+          ],
+        }),
+      },
+      isAdmin ? { $addToSet: { admins: targetId } } : { $pull: { admins: targetId } },
+    );
+    if (!updateResult.matchedCount) {
+      return sendError(
+        res,
+        isAdmin ? "GROUP_CHANGED" : "LAST_GROUP_ADMIN",
+        isAdmin ? "The group changed. Refresh and try again." : "A group must have at least one admin",
+        409,
+      );
+    }
+    await emitGroupUpdated(getIO(), chat._id);
+    const updatedChat = await Chat.findById(chat._id).populate({
+      path: "participants",
+      select: "name username photoURL isOnline lastSeen role status",
+    });
+    sendSuccess(res, { chat: updatedChat });
+  } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
+// PATCH /api/chats/:chatId/group-profile — update group name/photo (admins only)
+export async function updateGroupProfile(req, res) {
+  try {
+    const chat = await getAdminGroup(req, res);
+    if (!chat) return;
+    const updates = {};
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.photoURL !== undefined) updates.groupPhotoURL = req.body.photoURL;
+    await Chat.updateOne({ _id: chat._id, isGroup: true, admins: req.userId }, { $set: updates });
+    await emitGroupUpdated(getIO(), chat._id);
+    const updatedChat = await Chat.findById(chat._id).populate({
+      path: "participants",
+      select: "name username photoURL isOnline lastSeen role status",
+    });
+    sendSuccess(res, { chat: updatedChat });
+  } catch (error) {
     sendError(res, "SERVER_ERROR", error.message, 500);
   }
 }
@@ -309,9 +599,10 @@ export async function deleteChat(req, res) {
 
     const io = getIO();
     if (chat.isGroup) {
+      await ensureGroupAdmin(chat);
       const updatedChat = await Chat.findOneAndUpdate(
         { _id: chatId, participants: req.userId },
-        { $pull: { participants: req.userId } },
+        { $pull: { participants: req.userId, admins: req.userId } },
         { new: true },
       );
       if (!updatedChat) return sendError(res, "CHAT_NOT_FOUND", "Chat not found", 404);
@@ -324,12 +615,17 @@ export async function deleteChat(req, res) {
         await Message.deleteMany({ chatId });
         await Chat.findByIdAndDelete(chatId);
       } else {
+        if (!updatedChat.admins?.length) {
+          updatedChat.admins = [updatedChat.participants[0]];
+          await updatedChat.save();
+        }
         for (const participantId of updatedChat.participants) {
           io?.to(participantId.toString()).emit("group_member_left", {
             chatId,
             userId: req.userId.toString(),
           });
         }
+        await emitGroupUpdated(io, chatId);
       }
       io?.to(req.userId.toString()).emit("chat_deleted", { chatId });
       return sendSuccess(res, { message: "You left the group" });
