@@ -16,6 +16,7 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 // Routes
 import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/users.js";
+import noteRoutes from "./routes/notes.js";
 import chatRoutes from "./routes/chats.js";
 import messageRoutes from "./routes/messages.js";
 import uploadRoutes from "./routes/upload.js";
@@ -67,6 +68,7 @@ app.use(
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/notes", noteRoutes);
 app.use("/api/chats", chatRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/upload", uploadRoutes);
