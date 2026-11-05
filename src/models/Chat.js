@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 const chatSchema = new mongoose.Schema(
   {
     participants: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    isGroup: { type: Boolean, default: false },
+    name: { type: String, trim: true, maxlength: 60 },
     lastMessage: {
       text: String,
       senderId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

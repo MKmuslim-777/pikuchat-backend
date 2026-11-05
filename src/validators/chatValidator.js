@@ -4,6 +4,13 @@ export const createChatSchema = z.object({
   userId: z.string().min(1, "User ID is required"),
 });
 
+export const createGroupSchema = z.object({
+  name: z.string().trim().min(1, "Group name is required").max(60, "Group name must be 60 characters or fewer"),
+  userIds: z.array(z.string().regex(/^[0-9a-f]{24}$/i, "Invalid user ID"))
+    .min(1, "Select at least one other person")
+    .refine((userIds) => new Set(userIds).size === userIds.length, "Duplicate members are not allowed"),
+});
+
 export const sendMessageSchema = z.object({
   chatId: z.string().min(1, "Chat ID is required"),
   receiverId: z.string().min(1, "Receiver ID is required"),
@@ -17,4 +24,4 @@ export const editMessageSchema = z.object({
   text: z.string().min(1, "Text is required").max(5000, "Message too long"),
 });
 
-export default { createChatSchema, sendMessageSchema, editMessageSchema };
+export default { createChatSchema, createGroupSchema, sendMessageSchema, editMessageSchema };

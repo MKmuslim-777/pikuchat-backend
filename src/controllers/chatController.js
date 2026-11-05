@@ -31,6 +31,7 @@ export async function createChat(req, res) {
 
     // Check if a chat already exists between these two users
     let chat = await Chat.findOne({
+      isGroup: { $ne: true },
       participants: { $all: [req.userId, userId], $size: 2 },
     }).populate({
       path: "participants",
@@ -47,6 +48,96 @@ export async function createChat(req, res) {
 
     sendSuccess(res, { chat });
   } catch (error) {
+    sendError(res, "SERVER_ERROR", error.message, 500);
+  }
+}
+
+// POST /api/chats/group — create a group chat (users may belong to at most 3)
+export async function createGroup(req, res) {
+  const memberIds = [...new Set([req.userId.toString(), ...req.body.userIds])];
+  if (memberIds.length < 2) {
+    return sendError(res, "VALIDATION_ERROR", "Select at least one other person", 400);
+  }
+  const reservedIds = [];
+  let createdChat;
+
+  try {
+    const members = await User.find({
+      _id: { $in: memberIds },
+      "status.isBlocked": { $ne: true },
+    }).select("_id blockedUsers");
+
+    if (members.length !== memberIds.length) {
+      return sendError(res, "USER_NOT_FOUND", "One or more selected users are unavailable", 400);
+    }
+
+    const memberIdSet = new Set(memberIds);
+    const hasBlockedPair = members.some((member) =>
+      (member.blockedUsers || []).some((blockedId) =>
+        memberIdSet.has(blockedId.toString()) &&
+        blockedId.toString() !== member._id.toString()
+      )
+    );
+    if (hasBlockedPair) {
+      return sendError(res, "GROUP_MEMBER_BLOCKED", "A selected member cannot be added to this group", 400);
+    }
+
+    for (const memberId of memberIds) {
+      const reserved = await User.findOneAndUpdate(
+        {
+          _id: memberId,
+          $or: [
+            { groupChatCount: { $lt: 3 } },
+            { groupChatCount: { $exists: false } },
+          ],
+        },
+        { $inc: { groupChatCount: 1 } },
+        { new: true, projection: { _id: 1 } },
+      );
+
+      if (!reserved) {
+        await User.updateMany(
+          { _id: { $in: reservedIds } },
+          { $inc: { groupChatCount: -1 } },
+        );
+        reservedIds.length = 0;
+        return sendError(
+          res,
+          "GROUP_LIMIT_REACHED",
+          "Every member can be in at most 3 groups. Remove someone from a group before creating another.",
+          409,
+        );
+      }
+      reservedIds.push(memberId);
+    }
+
+    createdChat = await Chat.create({
+      name: req.body.name,
+      isGroup: true,
+      participants: memberIds,
+    });
+
+    const chat = await Chat.findById(createdChat._id).populate({
+      path: "participants",
+      select: "name username photoURL isOnline lastSeen role status",
+    });
+    const io = getIO();
+    if (io) {
+      for (const memberId of memberIds) {
+        if (memberId !== req.userId.toString()) {
+          io.to(memberId).emit("group_created", { chat });
+        }
+      }
+    }
+    sendSuccess(res, { chat }, 201);
+  } catch (error) {
+    if (createdChat) await Chat.findByIdAndDelete(createdChat._id);
+    if (reservedIds.length) {
+      await User.updateMany(
+        { _id: { $in: reservedIds } },
+        { $inc: { groupChatCount: -1 } },
+      );
+    }
     sendError(res, "SERVER_ERROR", error.message, 500);
   }
 }
@@ -146,14 +237,13 @@ export async function clearChatMessages(req, res) {
       { isDeleted: true, text: "", fileUrl: null, publicId: null }
     );
 
-    // Notify the other participant via socket
+    // Notify every other participant, including all group members.
     const io = getIO();
     if (io) {
-      const otherId = chat.participants.find(
-        (p) => p.toString() !== req.userId.toString()
-      );
-      if (otherId) {
-        io.to(otherId.toString()).emit("chat_cleared", { chatId });
+      for (const participantId of chat.participants) {
+        if (participantId.toString() !== req.userId.toString()) {
+          io.to(participantId.toString()).emit("chat_cleared", { chatId });
+        }
       }
     }
 
@@ -217,20 +307,42 @@ export async function deleteChat(req, res) {
     const chat = await Chat.findOne({ _id: chatId, participants: req.userId });
     if (!chat) return sendError(res, "CHAT_NOT_FOUND", "Chat not found", 404);
 
-    // Delete all messages
-    await Message.deleteMany({ chatId });
-    // Delete the chat
-    await Chat.findByIdAndDelete(chatId);
-
-    // Notify other participant
     const io = getIO();
+    if (chat.isGroup) {
+      const updatedChat = await Chat.findOneAndUpdate(
+        { _id: chatId, participants: req.userId },
+        { $pull: { participants: req.userId } },
+        { new: true },
+      );
+      if (!updatedChat) return sendError(res, "CHAT_NOT_FOUND", "Chat not found", 404);
+      await User.updateOne(
+        { _id: req.userId, groupChatCount: { $gt: 0 } },
+        { $inc: { groupChatCount: -1 } },
+      );
+
+      if (updatedChat.participants.length === 0) {
+        await Message.deleteMany({ chatId });
+        await Chat.findByIdAndDelete(chatId);
+      } else {
+        for (const participantId of updatedChat.participants) {
+          io?.to(participantId.toString()).emit("group_member_left", {
+            chatId,
+            userId: req.userId.toString(),
+          });
+        }
+      }
+      io?.to(req.userId.toString()).emit("chat_deleted", { chatId });
+      return sendSuccess(res, { message: "You left the group" });
+    }
+
+    await Message.deleteMany({ chatId });
+    await Chat.findByIdAndDelete(chatId);
     if (io) {
       const otherId = chat.participants.find(
         (p) => p.toString() !== req.userId.toString()
       );
       if (otherId) io.to(otherId.toString()).emit("chat_deleted", { chatId });
     }
-
     sendSuccess(res, { message: "Chat deleted" });
   } catch (error) {
     sendError(res, "SERVER_ERROR", error.message, 500);

@@ -509,6 +509,28 @@ export async function deleteUser(req, res) {
       { isDeleted: true, text: "", fileUrl: null }
     );
 
+    // Keep group membership counters accurate for members left in deleted groups.
+    const affectedGroups = await Chat.find({
+      participants: user._id,
+      isGroup: true,
+    }).select("participants").lean();
+    const groupMemberships = new Map();
+    for (const chat of affectedGroups) {
+      for (const participantId of chat.participants) {
+        const memberId = participantId.toString();
+        if (memberId !== userId) {
+          groupMemberships.set(memberId, (groupMemberships.get(memberId) || 0) + 1);
+          io?.to(memberId).emit("chat_deleted", { chatId: chat._id.toString() });
+        }
+      }
+    }
+    await Promise.all([...groupMemberships].map(([memberId, count]) =>
+      User.updateOne(
+        { _id: memberId, groupChatCount: { $gte: count } },
+        { $inc: { groupChatCount: -count } },
+      )
+    ));
+
     // Delete all chats involving this user
     await Chat.deleteMany({ participants: user._id });
 

@@ -3,8 +3,15 @@ import Chat from "../models/Chat.js";
 import { getIO } from "../config/socket.js";
 import { deleteFromCloudinary } from "../config/cloudinary.js";
 import { sendSuccess, sendError } from "../utils/helpers.js";
-import { getSocketRoomTargets } from "../utils/socketIds.js";
 import { sendPushNotification } from "../utils/pushNotifier.js";
+
+async function emitToChatMembers(io, chatId, event, payload) {
+  if (!io) return;
+  const chat = await Chat.findById(chatId).select("participants").lean();
+  for (const participantId of chat?.participants || []) {
+    io.to(participantId.toString()).emit(event, payload);
+  }
+}
 
 // POST /api/messages — send message (REST fallback)
 export async function sendMessage(req, res) {
@@ -50,11 +57,14 @@ export async function sendMessage(req, res) {
     };
     await chat.save();
 
-    // Emit via socket
+    // Emit to all other members when sending into a group conversation.
     const io = getIO();
     if (io) {
-      const targetRoom = getSocketRoomTargets(recipientId)[0];
-      if (targetRoom) io.to(targetRoom).emit("receive_message", message);
+      for (const participantId of participantIds) {
+        if (participantId !== req.userId.toString()) {
+          io.to(participantId).emit("receive_message", message);
+        }
+      }
     }
 
     const notificationBody = text?.trim()
@@ -66,18 +76,19 @@ export async function sendMessage(req, res) {
           : fileUrl
             ? "Sent you a file"
             : "Sent you a message";
-    void sendPushNotification(
-      recipientId,
-      {
+    const notificationPayload = {
         title: req.user?.name || "New message",
         body: notificationBody,
         icon: req.user?.photoURL || "/favicon.ico",
         chatId: chatId.toString(),
         tag: `piku-msg-${chatId}-${message._id}`,
         data: { url: `/chat/${chatId}`, chatId: chatId.toString() },
-      },
-      io,
-    );
+      };
+    for (const participantId of participantIds) {
+      if (participantId !== req.userId.toString()) {
+        void sendPushNotification(participantId, notificationPayload, io);
+      }
+    }
 
     sendSuccess(res, { message });
   } catch (error) {
@@ -97,6 +108,8 @@ export async function editMessage(req, res) {
     if (!message) {
       return sendError(res, "MESSAGE_NOT_FOUND", "Message not found", 404);
     }
+    const chat = await Chat.findOne({ _id: message.chatId, participants: req.userId }).select("_id");
+    if (!chat) return sendError(res, "CHAT_NOT_FOUND", "Chat not found", 404);
 
     // Can only edit within 24 hours
     const hoursSinceCreated =
@@ -116,15 +129,10 @@ export async function editMessage(req, res) {
 
     // Emit via socket
     const io = getIO();
-    if (io) {
-      const targetRoom = getSocketRoomTargets(message.receiverId)[0];
-      if (targetRoom) {
-        io.to(targetRoom).emit("message_edited", {
-          messageId: message._id,
-          text: message.text,
-        });
-      }
-    }
+    await emitToChatMembers(io, message.chatId, "message_edited", {
+      messageId: message._id,
+      text: message.text,
+    });
 
     sendSuccess(res, { message });
   } catch (error) {
@@ -143,6 +151,8 @@ export async function deleteMessage(req, res) {
     if (!message) {
       return sendError(res, "MESSAGE_NOT_FOUND", "Message not found", 404);
     }
+    const chat = await Chat.findOne({ _id: message.chatId, participants: req.userId }).select("_id");
+    if (!chat) return sendError(res, "CHAT_NOT_FOUND", "Chat not found", 404);
 
     // Delete file from Cloudinary if present
     if (message.publicId) {
@@ -157,14 +167,9 @@ export async function deleteMessage(req, res) {
 
     // Emit via socket
     const io = getIO();
-    if (io) {
-      const targetRoom = getSocketRoomTargets(message.receiverId)[0];
-      if (targetRoom) {
-        io.to(targetRoom).emit("message_deleted", {
-          messageId: message._id,
-        });
-      }
-    }
+    await emitToChatMembers(io, message.chatId, "message_deleted", {
+      messageId: message._id,
+    });
 
     sendSuccess(res, { message: "Message deleted" });
   } catch (error) {
@@ -182,6 +187,8 @@ export async function reactToMessage(req, res) {
     const message = await Message.findById(req.params.id);
     if (!message)
       return sendError(res, "MESSAGE_NOT_FOUND", "Message not found", 404);
+    const chat = await Chat.findOne({ _id: message.chatId, participants: req.userId }).select("_id");
+    if (!chat) return sendError(res, "CHAT_NOT_FOUND", "Chat not found", 404);
 
     const existing = message.reactions.find(
       (r) => r.userId.toString() === req.userId.toString() && r.emoji === emoji,
@@ -203,22 +210,12 @@ export async function reactToMessage(req, res) {
 
     await message.save();
 
-    // Emit to both participants
+    // Emit the updated reaction to every conversation member.
     const io = getIO();
-    if (io) {
-      const receiverRoom = getSocketRoomTargets(message.receiverId)[0];
-      const senderRoom = getSocketRoomTargets(message.senderId)[0];
-      if (receiverRoom)
-        io.to(receiverRoom).emit("message_reaction", {
-          messageId: message._id,
-          reactions: message.reactions,
-        });
-      if (senderRoom)
-        io.to(senderRoom).emit("message_reaction", {
-          messageId: message._id,
-          reactions: message.reactions,
-        });
-    }
+    await emitToChatMembers(io, message.chatId, "message_reaction", {
+      messageId: message._id,
+      reactions: message.reactions,
+    });
 
     sendSuccess(res, { reactions: message.reactions });
   } catch (error) {

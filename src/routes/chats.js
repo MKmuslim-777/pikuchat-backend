@@ -1,9 +1,9 @@
 import { Router } from "express";
 import authMiddleware from "../middleware/auth.js";
 import validate from "../middleware/validate.js";
-import { createChatSchema } from "../validators/chatValidator.js";
+import { createChatSchema, createGroupSchema } from "../validators/chatValidator.js";
 import {
-  getChats, createChat, getMessages,
+  getChats, createChat, createGroup, getMessages,
   clearChatMessages, blockUserInChat, unblockUserInChat, deleteChat, exportChat,
 } from "../controllers/chatController.js";
 
@@ -13,6 +13,7 @@ router.use(authMiddleware);
 
 router.get("/", getChats);
 router.post("/", validate(createChatSchema), createChat);
+router.post("/group", validate(createGroupSchema), createGroup);
 router.get("/:chatId/messages", getMessages);
 router.delete("/:chatId/messages", clearChatMessages);   // clear all messages
 router.patch("/:chatId/block", blockUserInChat);         // block user

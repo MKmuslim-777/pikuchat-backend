@@ -23,11 +23,16 @@ export default function socketHandler(io, socket) {
   User.findByIdAndUpdate(userId, { isOnline: true, lastSeen: new Date() }).exec();
   socket.broadcast.emit("user_status", { userId, isOnline: true });
 
-  // ── Helper: get the OTHER participant's userId string ─────────────────────
-  async function getOtherUserId(chatId) {
-    const chat = await Chat.findById(chatId).select("participants").lean();
-    if (!chat) return null;
-    return chat.participants.map((p) => p.toString()).find((id) => id !== userId) || null;
+  // ── Helper: notify every other member of a conversation ───────────────────
+  async function emitToOtherMembers(chatId, event, payload) {
+    const chat = await Chat.findOne({ _id: chatId, participants: userId })
+      .select("participants")
+      .lean();
+    if (!chat) return;
+    for (const participantId of chat.participants) {
+      const targetId = participantId.toString();
+      if (targetId !== userId) io.to(targetId).emit(event, payload);
+    }
   }
 
   // ── send_message ──────────────────────────────────────────────────────────
@@ -88,8 +93,12 @@ export default function socketHandler(io, socket) {
 
       const msgObj = message.toObject();
 
-      // Deliver to receiver
-      io.to(receiverId.toString()).emit("receive_message", msgObj);
+      // Deliver to every other member, including all group members.
+      for (const participantId of chatParticipants) {
+        if (participantId !== userId) {
+          io.to(participantId).emit("receive_message", msgObj);
+        }
+      }
       // Echo back to sender's other sessions/tabs
       socket.emit("receive_message", msgObj);
 
@@ -104,18 +113,19 @@ export default function socketHandler(io, socket) {
               : fileUrl
                 ? "Sent you a file"
                 : "Sent you a message";
-      void sendPushNotification(
-        receiverId.toString(),
-        {
+      const notificationPayload = {
           title: socket.userDoc?.name || "New message",
           body: notificationBody,
           icon: socket.userDoc?.photoURL || "/favicon.ico",
           chatId: chatId.toString(),
           tag: `piku-msg-${chatId}-${message._id}`,
           data: { url: `/chat/${chatId}`, chatId: chatId.toString() },
-        },
-        io,
-      );
+        };
+      for (const participantId of chatParticipants) {
+        if (participantId !== userId) {
+          void sendPushNotification(participantId, notificationPayload, io);
+        }
+      }
 
       ack?.({ success: true, message: msgObj });
     } catch (err) {
@@ -127,8 +137,7 @@ export default function socketHandler(io, socket) {
   // ── typing_start ──────────────────────────────────────────────────────────
   socket.on("typing_start", async ({ chatId }) => {
     try {
-      const otherId = await getOtherUserId(chatId);
-      if (otherId) io.to(otherId).emit("typing_start", { chatId, userId });
+      await emitToOtherMembers(chatId, "typing_start", { chatId, userId });
     } catch (err) {
       logger.error("typing_start error:", err.message);
     }
@@ -137,8 +146,7 @@ export default function socketHandler(io, socket) {
   // ── typing_stop ───────────────────────────────────────────────────────────
   socket.on("typing_stop", async ({ chatId }) => {
     try {
-      const otherId = await getOtherUserId(chatId);
-      if (otherId) io.to(otherId).emit("typing_stop", { chatId, userId });
+      await emitToOtherMembers(chatId, "typing_stop", { chatId, userId });
     } catch (err) {
       logger.error("typing_stop error:", err.message);
     }
@@ -147,12 +155,17 @@ export default function socketHandler(io, socket) {
   // ── message_read ──────────────────────────────────────────────────────────
   socket.on("message_read", async ({ chatId }) => {
     try {
-      await Message.updateMany(
-        { chatId, receiverId: userId, isSeen: false },
-        { isSeen: true }
-      );
-      const otherId = await getOtherUserId(chatId);
-      if (otherId) io.to(otherId).emit("message_read", { chatId, readBy: userId });
+      const chat = await Chat.findOne({ _id: chatId, participants: userId })
+        .select("isGroup")
+        .lean();
+      if (!chat) return;
+      if (!chat.isGroup) {
+        await Message.updateMany(
+          { chatId, receiverId: userId, isSeen: false },
+          { isSeen: true }
+        );
+      }
+      await emitToOtherMembers(chatId, "message_read", { chatId, readBy: userId });
     } catch (err) {
       logger.error("message_read error:", err.message);
     }
@@ -164,13 +177,15 @@ export default function socketHandler(io, socket) {
       const msg = await Message.findById(messageId);
       if (!msg) return ack?.({ success: false, error: "Message not found" });
       if (!msg.isViewOnce) return ack?.({ success: false, error: "Not a view-once message" });
+      const chat = await Chat.findOne({ _id: msg.chatId, participants: userId }).select("_id");
+      if (!chat) return ack?.({ success: false, error: "Chat access denied" });
 
       msg.isViewed = true;
       await msg.save();
 
       const payload = { messageId: msg._id, chatId: msg.chatId, isViewed: true };
-      io.to(msg.senderId.toString()).emit("message_viewed_once", payload);
-      io.to(msg.receiverId.toString()).emit("message_viewed_once", payload);
+      await emitToOtherMembers(msg.chatId, "message_viewed_once", payload);
+      socket.emit("message_viewed_once", payload);
       ack?.({ success: true });
     } catch (err) {
       logger.error("message_viewed_once error:", err.message);
@@ -183,6 +198,8 @@ export default function socketHandler(io, socket) {
     try {
       const msg = await Message.findOne({ _id: messageId, senderId: userId });
       if (!msg) return ack?.({ success: false, error: "Message not found" });
+      const chat = await Chat.findOne({ _id: msg.chatId, participants: userId }).select("_id");
+      if (!chat) return ack?.({ success: false, error: "Chat access denied" });
 
       const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
       if (msg.createdAt < cutoff) {
@@ -194,7 +211,7 @@ export default function socketHandler(io, socket) {
       await msg.save();
 
       const payload = { messageId, text: msg.text };
-      io.to(msg.receiverId.toString()).emit("message_edited", payload);
+      await emitToOtherMembers(msg.chatId, "message_edited", payload);
       socket.emit("message_edited", payload);
       ack?.({ success: true });
     } catch (err) {
@@ -208,6 +225,8 @@ export default function socketHandler(io, socket) {
     try {
       const msg = await Message.findOne({ _id: messageId, senderId: userId });
       if (!msg) return ack?.({ success: false, error: "Message not found" });
+      const chat = await Chat.findOne({ _id: msg.chatId, participants: userId }).select("_id");
+      if (!chat) return ack?.({ success: false, error: "Chat access denied" });
 
       if (msg.publicId) {
         deleteFromCloudinary(msg.publicId).catch((e) =>
@@ -222,7 +241,7 @@ export default function socketHandler(io, socket) {
       await msg.save();
 
       const payload = { messageId };
-      io.to(msg.receiverId.toString()).emit("message_deleted", payload);
+      await emitToOtherMembers(msg.chatId, "message_deleted", payload);
       socket.emit("message_deleted", payload);
       ack?.({ success: true });
     } catch (err) {
@@ -236,6 +255,8 @@ export default function socketHandler(io, socket) {
     try {
       const msg = await Message.findById(messageId);
       if (!msg) return ack?.({ success: false, error: "Message not found" });
+      const chat = await Chat.findOne({ _id: msg.chatId, participants: userId }).select("_id");
+      if (!chat) return ack?.({ success: false, error: "Chat access denied" });
 
       const existing = msg.reactions.find(
         (r) => r.userId.toString() === userId && r.emoji === emoji
@@ -252,7 +273,7 @@ export default function socketHandler(io, socket) {
       await msg.save();
 
       const payload = { messageId: msg._id, reactions: msg.reactions };
-      io.to(msg.receiverId.toString()).emit("message_reaction", payload);
+      await emitToOtherMembers(msg.chatId, "message_reaction", payload);
       socket.emit("message_reaction", payload);
       ack?.({ success: true, reactions: msg.reactions });
     } catch (err) {

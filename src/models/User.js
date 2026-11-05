@@ -74,6 +74,7 @@ const userSchema = new mongoose.Schema(
 
     // Blocked users
     blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    groupChatCount: { type: Number, default: 0, min: 0, max: 3 },
 
     isOnline: { type: Boolean, default: false },
     lastSeen: { type: Date, default: Date.now },
