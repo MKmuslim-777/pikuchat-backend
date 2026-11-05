@@ -101,7 +101,7 @@ export default function socketHandler(io, socket) {
         }
       }
       // Echo back to sender's other sessions/tabs
-      socket.emit("receive_message", msgObj);
+      socket.emit("receive_message", { ...msgObj, isSenderEcho: true });
 
       const notificationBody = isViewOnce
         ? "Sent you a view-once message"
