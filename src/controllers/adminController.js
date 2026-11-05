@@ -524,21 +524,30 @@ export async function deleteUser(req, res) {
 // POST /api/admin/broadcast — send notification to all online users
 export async function broadcastNotification(req, res) {
   try {
-    const { message, type = "info" } = req.body;
+    const { message, type = "info" } = req.body || {};
+    const validTypes = new Set(["info", "success", "warning", "error"]);
 
-    if (!message?.trim()) {
+    if (typeof message !== "string" || !message.trim()) {
       return sendError(res, "VALIDATION_ERROR", "Message is required", 400);
+    }
+    if (message.trim().length > 500) {
+      return sendError(res, "VALIDATION_ERROR", "Message must be 500 characters or fewer", 400);
+    }
+    if (!validTypes.has(type)) {
+      return sendError(res, "VALIDATION_ERROR", "Invalid broadcast type", 400);
     }
 
     const io = getIO();
-    if (io) {
-      io.emit("admin_broadcast", {
-        message: message.trim(),
-        type, // info | warning | error | success
-        sentAt: new Date().toISOString(),
-        sentBy: { name: req.user.name, username: req.user.username },
-      });
+    if (!io) {
+      return sendError(res, "SOCKET_UNAVAILABLE", "Broadcast service is not ready", 503);
     }
+
+    io.emit("admin_broadcast", {
+      message: message.trim(),
+      type,
+      sentAt: new Date().toISOString(),
+      sentBy: { name: req.user.name, username: req.user.username },
+    });
 
     sendSuccess(res, { message: "Broadcast sent successfully" });
   } catch (error) {
