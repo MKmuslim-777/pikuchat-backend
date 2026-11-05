@@ -4,6 +4,7 @@ import Chat from "../models/Chat.js";
 import User from "../models/User.js";
 import { deleteFromCloudinary } from "../config/cloudinary.js";
 import logger from "../utils/logger.js";
+import { areSameSocketId } from "../utils/socketIds.js";
 
 /*
  * Room strategy: each user joins a room named by their userId string.
@@ -54,8 +55,8 @@ export default function socketHandler(io, socket) {
 
       const chatParticipants = chat.participants.map((participant) => participant.toString());
       if (
-        receiverId.toString() === userId ||
-        !chatParticipants.includes(receiverId.toString())
+        areSameSocketId(receiverId, userId) ||
+        !chatParticipants.some((participantId) => areSameSocketId(participantId, receiverId))
       ) {
         return ack?.({ success: false, error: "Invalid chat recipient" });
       }
@@ -95,7 +96,7 @@ export default function socketHandler(io, socket) {
 
       // Deliver to every other member, including all group members.
       for (const participantId of chatParticipants) {
-        if (participantId !== userId) {
+        if (!areSameSocketId(participantId, userId)) {
           io.to(participantId).emit("receive_message", msgObj);
         }
       }
@@ -118,11 +119,12 @@ export default function socketHandler(io, socket) {
           body: notificationBody,
           icon: socket.userDoc?.photoURL || "/favicon.ico",
           chatId: chatId.toString(),
+          senderId: userId,
           tag: `piku-msg-${chatId}-${message._id}`,
           data: { url: `/chat/${chatId}`, chatId: chatId.toString() },
         };
       for (const participantId of chatParticipants) {
-        if (participantId !== userId) {
+        if (!areSameSocketId(participantId, userId)) {
           void sendPushNotification(participantId, notificationPayload, io);
         }
       }

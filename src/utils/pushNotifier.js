@@ -1,6 +1,7 @@
 import webpush from "web-push";
 import User from "../models/User.js";
 import logger from "./logger.js";
+import { areSameSocketId } from "./socketIds.js";
 
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
 const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
@@ -20,6 +21,12 @@ if (publicVapidKey && privateVapidKey) {
  */
 export async function sendPushNotification(userId, payload, io) {
   if (!publicVapidKey || !privateVapidKey) return;
+  if (
+    payload.senderId &&
+    areSameSocketId(payload.senderId, userId)
+  ) {
+    return;
+  }
 
   try {
     const user = await User.findById(userId).select("pushSubscriptions status mutedChats");

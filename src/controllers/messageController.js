@@ -4,6 +4,7 @@ import { getIO } from "../config/socket.js";
 import { deleteFromCloudinary } from "../config/cloudinary.js";
 import { sendSuccess, sendError } from "../utils/helpers.js";
 import { sendPushNotification } from "../utils/pushNotifier.js";
+import { areSameSocketId } from "../utils/socketIds.js";
 
 async function emitToChatMembers(io, chatId, event, payload) {
   if (!io) return;
@@ -32,8 +33,8 @@ export async function sendMessage(req, res) {
     const participantIds = chat.participants.map((participant) => participant.toString());
     if (
       !recipientId ||
-      recipientId === req.userId.toString() ||
-      !participantIds.includes(recipientId)
+      areSameSocketId(recipientId, req.userId) ||
+      !participantIds.some((participantId) => areSameSocketId(participantId, recipientId))
     ) {
       return sendError(res, "VALIDATION_ERROR", "Invalid chat recipient", 400);
     }
@@ -61,7 +62,7 @@ export async function sendMessage(req, res) {
     const io = getIO();
     if (io) {
       for (const participantId of participantIds) {
-        if (participantId !== req.userId.toString()) {
+        if (!areSameSocketId(participantId, req.userId)) {
           io.to(participantId).emit("receive_message", message);
         }
       }
@@ -81,11 +82,12 @@ export async function sendMessage(req, res) {
         body: notificationBody,
         icon: req.user?.photoURL || "/favicon.ico",
         chatId: chatId.toString(),
+        senderId: req.userId.toString(),
         tag: `piku-msg-${chatId}-${message._id}`,
         data: { url: `/chat/${chatId}`, chatId: chatId.toString() },
       };
     for (const participantId of participantIds) {
-      if (participantId !== req.userId.toString()) {
+      if (!areSameSocketId(participantId, req.userId)) {
         void sendPushNotification(participantId, notificationPayload, io);
       }
     }
