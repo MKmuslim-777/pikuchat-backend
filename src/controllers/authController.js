@@ -214,18 +214,18 @@ export async function revokeAllSessions(req, res) {
 }
 
 export async function updateNotificationSettings(req, res) {
-  const { enabled, start, end, timeZone } = req.body?.doNotDisturb || {};
-  const validTime = (value) => typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
-  if (typeof enabled !== "boolean" || !validTime(start) || !validTime(end) || typeof timeZone !== "string") {
+  const { enabled, until } = req.body?.doNotDisturb || {};
+  const untilDate = new Date(until);
+  if (
+    typeof enabled !== "boolean" ||
+    (enabled && (!until || Number.isNaN(untilDate.getTime()) || untilDate <= new Date()))
+  ) {
     return sendError(res, "VALIDATION_ERROR", "Invalid Do Not Disturb settings", 400);
   }
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
-  } catch {
-    return sendError(res, "VALIDATION_ERROR", "Invalid time zone", 400);
-  }
-  try {
-    req.user.notificationSettings = { doNotDisturb: { enabled, start, end, timeZone } };
+    req.user.notificationSettings = {
+      doNotDisturb: { enabled, until: enabled ? untilDate : null },
+    };
     await req.user.save();
     getIO()?.to(req.userId.toString()).emit(
       "notification_settings_updated",

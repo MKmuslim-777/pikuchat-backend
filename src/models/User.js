@@ -42,9 +42,7 @@ const userSchema = new mongoose.Schema(
     notificationSettings: {
       doNotDisturb: {
         enabled: { type: Boolean, default: false },
-        start: { type: String, default: "22:00" },
-        end: { type: String, default: "08:00" },
-        timeZone: { type: String, default: "UTC" },
+        until: { type: Date, default: null },
       },
     },
     sessions: [

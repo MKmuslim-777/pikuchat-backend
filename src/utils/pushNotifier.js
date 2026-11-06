@@ -9,24 +9,8 @@ const vapidSubject = process.env.VAPID_SUBJECT || "mailto:support@pikuchat.app";
 
 export function isDoNotDisturbActive(settings, now = new Date()) {
   const dnd = settings?.doNotDisturb;
-  if (!dnd?.enabled || dnd.start === dnd.end) return false;
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: dnd.timeZone || "UTC",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(now);
-  const localMinutes = Number(parts.find((part) => part.type === "hour")?.value) * 60 +
-    Number(parts.find((part) => part.type === "minute")?.value);
-  const toMinutes = (time) => {
-    const [hour, minute] = time.split(":").map(Number);
-    return hour * 60 + minute;
-  };
-  const start = toMinutes(dnd.start);
-  const end = toMinutes(dnd.end);
-  return start < end
-    ? localMinutes >= start && localMinutes < end
-    : localMinutes >= start || localMinutes < end;
+  const until = new Date(dnd?.until).getTime();
+  return Boolean(dnd?.enabled && Number.isFinite(until) && now.getTime() < until);
 }
 
 if (publicVapidKey && privateVapidKey) {
