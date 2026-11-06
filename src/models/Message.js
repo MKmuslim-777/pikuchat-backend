@@ -21,6 +21,7 @@ const messageSchema = new mongoose.Schema(
     },
     voiceDuration: { type: Number, default: 0 }, // in seconds
     publicId:  { type: String, default: null },
+    clientMessageId: { type: String, maxlength: 100 },
     replyTo: {
       _id:      { type: mongoose.Schema.Types.ObjectId },
       text:     { type: String, default: "" },
@@ -42,5 +43,12 @@ const messageSchema = new mongoose.Schema(
 messageSchema.index({ chatId: 1, createdAt: -1 });
 messageSchema.index({ senderId: 1 });
 messageSchema.index({ receiverId: 1, isSeen: 1 });
+messageSchema.index(
+  { senderId: 1, chatId: 1, clientMessageId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { clientMessageId: { $type: "string" } },
+  },
+);
 
 export default mongoose.model("Message", messageSchema);

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   addGroupMembersSchema,
   createGroupSchema,
+  sendMessageSchema,
   updateGroupAdminSchema,
   updateGroupProfileSchema,
 } from "../src/validators/chatValidator.js";
@@ -37,6 +38,31 @@ describe("group chat creation validation", () => {
       false,
     );
     assert.equal(createGroupSchema.safeParse({ name: "Team", userIds: ["not-an-id"] }).success, false);
+  });
+});
+
+describe("message send validation", () => {
+  it("accepts a bounded idempotency key and reply metadata", () => {
+    const result = sendMessageSchema.safeParse({
+      chatId: userId("a"),
+      receiverId: userId("b"),
+      text: "Queued while offline",
+      clientMessageId: "client-generated-id",
+      replyTo: { _id: userId("c"), text: "Earlier message", senderId: userId("b") },
+    });
+
+    assert.equal(result.success, true);
+  });
+
+  it("rejects oversized client message IDs", () => {
+    assert.equal(
+      sendMessageSchema.safeParse({
+        chatId: userId("a"),
+        receiverId: userId("b"),
+        clientMessageId: "x".repeat(101),
+      }).success,
+      false,
+    );
   });
 });
 

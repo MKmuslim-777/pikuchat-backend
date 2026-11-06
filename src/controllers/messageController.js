@@ -5,6 +5,7 @@ import { deleteFromCloudinary } from "../config/cloudinary.js";
 import { sendSuccess, sendError } from "../utils/helpers.js";
 import { sendPushNotification } from "../utils/pushNotifier.js";
 import { areSameSocketId } from "../utils/socketIds.js";
+import { createMessageOnce } from "../utils/createMessage.js";
 
 async function emitToChatMembers(io, chatId, event, payload) {
   if (!io) return;
@@ -17,7 +18,17 @@ async function emitToChatMembers(io, chatId, event, payload) {
 // POST /api/messages — send message (REST fallback)
 export async function sendMessage(req, res) {
   try {
-    const { chatId, receiverId, text, fileUrl, fileType, voiceDuration, publicId } = req.body;
+    const {
+      chatId,
+      receiverId,
+      text,
+      fileUrl,
+      fileType,
+      voiceDuration,
+      publicId,
+      clientMessageId,
+      replyTo,
+    } = req.body;
 
     // Verify chat belongs to sender
     const chat = await Chat.findOne({
@@ -39,7 +50,7 @@ export async function sendMessage(req, res) {
       return sendError(res, "VALIDATION_ERROR", "Invalid chat recipient", 400);
     }
 
-    const message = await Message.create({
+    const { message, created } = await createMessageOnce({
       chatId,
       senderId: req.userId,
       receiverId: recipientId,
@@ -48,7 +59,20 @@ export async function sendMessage(req, res) {
       fileType: fileType || null,
       voiceDuration: voiceDuration ? Number(voiceDuration) : 0,
       publicId: publicId || null,
+      clientMessageId,
+      replyTo: replyTo?._id || replyTo?.text
+        ? {
+            _id: replyTo._id,
+            text: replyTo.text || "",
+            senderId: replyTo.senderId,
+            fileType: replyTo.fileType || null,
+          }
+        : undefined,
     });
+
+    if (!created) {
+      return sendSuccess(res, { message });
+    }
 
     // Update chat lastMessage
     chat.lastMessage = {

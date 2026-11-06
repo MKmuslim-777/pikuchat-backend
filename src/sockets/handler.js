@@ -5,6 +5,7 @@ import User from "../models/User.js";
 import { deleteFromCloudinary } from "../config/cloudinary.js";
 import logger from "../utils/logger.js";
 import { areSameSocketId } from "../utils/socketIds.js";
+import { createMessageOnce } from "../utils/createMessage.js";
 
 /*
  * Room strategy: each user joins a room named by their userId string.
@@ -39,7 +40,18 @@ export default function socketHandler(io, socket) {
   // ── send_message ──────────────────────────────────────────────────────────
   socket.on("send_message", async (data, ack) => {
     try {
-      const { chatId, receiverId, text, fileUrl, fileType, publicId, replyTo, voiceDuration, isViewOnce } = data;
+      const {
+        chatId,
+        receiverId,
+        text,
+        fileUrl,
+        fileType,
+        publicId,
+        replyTo,
+        voiceDuration,
+        isViewOnce,
+        clientMessageId,
+      } = data;
 
       if (!chatId || !receiverId) {
         return ack?.({ success: false, error: "chatId and receiverId are required" });
@@ -62,7 +74,7 @@ export default function socketHandler(io, socket) {
       }
 
       // Persist message
-      const message = await Message.create({
+      const { message, created } = await createMessageOnce({
         chatId,
         senderId:   userId,
         receiverId: receiverId.toString(),
@@ -71,6 +83,7 @@ export default function socketHandler(io, socket) {
         fileType:   fileType || null,
         voiceDuration: voiceDuration ? Number(voiceDuration) : 0,
         publicId:   publicId || null,
+        clientMessageId,
         isViewOnce: !!isViewOnce,
         isViewed:   false,
         replyTo:    replyTo?.text || replyTo?._id
@@ -82,6 +95,10 @@ export default function socketHandler(io, socket) {
             }
           : undefined,
       });
+
+      if (!created) {
+        return ack?.({ success: true, message: message.toObject() });
+      }
 
       // Update chat's lastMessage
       await Chat.findByIdAndUpdate(chatId, {
