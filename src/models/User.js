@@ -39,6 +39,23 @@ const userSchema = new mongoose.Schema(
     readReceiptsEnabled: { type: Boolean, default: true },
     /** "everyone" | "nobody" */
     lastSeenVisibility:  { type: String, enum: ["everyone", "nobody"], default: "everyone" },
+    notificationSettings: {
+      doNotDisturb: {
+        enabled: { type: Boolean, default: false },
+        start: { type: String, default: "22:00" },
+        end: { type: String, default: "08:00" },
+        timeZone: { type: String, default: "UTC" },
+      },
+    },
+    sessions: [
+      {
+        sessionId: { type: String, required: true },
+        device: { type: String, required: true },
+        userAgent: { type: String, default: "" },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
+    revokedLegacySessions: [{ type: String }],
 
     // Username change history (max 3 changes per 30 days enforced in controller)
     usernameHistory: [

@@ -1,5 +1,6 @@
 import { verifyToken } from "../utils/helpers.js";
 import User from "../models/User.js";
+import { registerLegacySession } from "../utils/sessions.js";
 
 export async function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -40,8 +41,25 @@ export async function authMiddleware(req, res, next) {
       });
     }
 
+    const sessionId = decoded.sessionId || await registerLegacySession(
+      user._id,
+      token,
+      req.get("user-agent") || "",
+    );
+    if (!user.sessions?.some((session) => session.sessionId === sessionId)) {
+      const activeSession = await User.exists({ _id: user._id, "sessions.sessionId": sessionId });
+      if (!activeSession) {
+        return res.status(401).json({
+          success: false,
+          error: { code: "SESSION_REVOKED", message: "This session is no longer active" },
+        });
+      }
+      user.sessions.push({ sessionId, device: "Current device", createdAt: new Date() });
+    }
+
     req.user = user;
     req.userId = user._id;
+    req.sessionId = sessionId;
     next();
   } catch (error) {
     return res.status(500).json({
@@ -64,8 +82,17 @@ export async function optionalAuth(req, res, next) {
   try {
     const user = await User.findById(decoded.userId).select("-googleId");
     if (user && !user.status?.isBlocked) {
+      const sessionId = decoded.sessionId || await registerLegacySession(
+        user._id,
+        token,
+        req.get("user-agent") || "",
+      );
+      const activeSession = user.sessions?.some((session) => session.sessionId === sessionId) ||
+        await User.exists({ _id: user._id, "sessions.sessionId": sessionId });
+      if (!activeSession) return next();
       req.user = user;
       req.userId = user._id;
+      req.sessionId = sessionId;
     }
   } catch {}
   next();

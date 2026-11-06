@@ -7,6 +7,28 @@ const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
 const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
 const vapidSubject = process.env.VAPID_SUBJECT || "mailto:support@pikuchat.app";
 
+export function isDoNotDisturbActive(settings, now = new Date()) {
+  const dnd = settings?.doNotDisturb;
+  if (!dnd?.enabled || dnd.start === dnd.end) return false;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: dnd.timeZone || "UTC",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const localMinutes = Number(parts.find((part) => part.type === "hour")?.value) * 60 +
+    Number(parts.find((part) => part.type === "minute")?.value);
+  const toMinutes = (time) => {
+    const [hour, minute] = time.split(":").map(Number);
+    return hour * 60 + minute;
+  };
+  const start = toMinutes(dnd.start);
+  const end = toMinutes(dnd.end);
+  return start < end
+    ? localMinutes >= start && localMinutes < end
+    : localMinutes >= start || localMinutes < end;
+}
+
 if (publicVapidKey && privateVapidKey) {
   webpush.setVapidDetails(vapidSubject, publicVapidKey, privateVapidKey);
 } else {
@@ -29,10 +51,11 @@ export async function sendPushNotification(userId, payload, io) {
   }
 
   try {
-    const user = await User.findById(userId).select("pushSubscriptions status mutedChats");
+    const user = await User.findById(userId).select("pushSubscriptions status mutedChats notificationSettings");
     if (!user || user.status?.isBlocked || !user.pushSubscriptions?.length) {
       return;
     }
+    if (isDoNotDisturbActive(user.notificationSettings, new Date())) return;
 
     if (payload.chatId) {
       const isMuted = user.mutedChats?.some((mute) => {
