@@ -54,6 +54,20 @@ describe("message send validation", () => {
     assert.equal(result.success, true);
   });
 
+  it("accepts voice messages sent through the REST queue", () => {
+    const result = sendMessageSchema.safeParse({
+      chatId: userId("a"),
+      receiverId: userId("b"),
+      fileUrl: "https://res.cloudinary.com/pikuchataudio/video/upload/voice.webm",
+      fileType: "voice",
+      voiceDuration: 12,
+      clientMessageId: "offline-voice-message",
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.data.voiceDuration, 12);
+  });
+
   it("rejects oversized client message IDs", () => {
     assert.equal(
       sendMessageSchema.safeParse({

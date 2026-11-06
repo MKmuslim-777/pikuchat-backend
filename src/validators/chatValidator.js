@@ -31,6 +31,7 @@ export const sendMessageSchema = z.object({
   receiverId: z.string().min(1, "Receiver ID is required"),
   text: z.string().max(5000, "Message too long").optional(),
   clientMessageId: z.string().min(1).max(100).optional(),
+  voiceDuration: z.number().nonnegative().optional(),
   replyTo: z.object({
     _id: z.string().optional(),
     text: z.string().max(5000).optional(),
@@ -38,7 +39,7 @@ export const sendMessageSchema = z.object({
     fileType: z.enum(["image", "video", "audio", "voice", "document", "other"]).nullable().optional(),
   }).optional(),
   fileUrl: z.string().url().optional(),
-  fileType: z.enum(["image", "video", "audio", "document", "other"]).optional(),
+  fileType: z.enum(["image", "video", "audio", "voice", "document", "other"]).optional(),
   publicId: z.string().optional(),
 });
 
