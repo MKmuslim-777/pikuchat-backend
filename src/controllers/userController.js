@@ -10,11 +10,14 @@ export async function searchUsers(req, res) {
     const { query } = req.query;
     if (!query || query.trim().length < 1) return sendSuccess(res, { users: [] });
 
+    // Escape regex special characters to prevent ReDoS / Regex injection
+    const sanitizedQuery = query.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     const currentUser = await User.findById(req.userId).select("blockedUsers");
 
     const users = await User.find({
       _id: { $ne: req.userId, $nin: currentUser?.blockedUsers || [] },
-      username: { $regex: query.trim(), $options: "i" },
+      username: { $regex: sanitizedQuery, $options: "i" },
       "status.isBlocked": { $ne: true },
     })
       .select("name username photoURL bio isOnline lastSeen")
@@ -37,7 +40,7 @@ export async function getUserProfile(req, res) {
       query = { username: id.toLowerCase() };
     }
     const user = await User.findOne(query)
-      .select("-googleId -mutedChats -hiddenChats -blockedUsers -reportedBy -pushSubscriptions");
+      .select("-googleId -sessions -revokedLegacySessions -mutedChats -hiddenChats -blockedUsers -reportedBy -pushSubscriptions");
     if (!user) return sendError(res, "USER_NOT_FOUND", "User not found", 404);
 
     const userObj = user.toObject();
