@@ -50,6 +50,23 @@ export async function sendMessage(req, res) {
       return sendError(res, "VALIDATION_ERROR", "Invalid chat recipient", 400);
     }
 
+    // Check if either user blocked the other
+    const User = (await import("../models/User.js")).default;
+    const [senderDoc, recipientDoc] = await Promise.all([
+      User.findById(req.userId).select("blockedUsers"),
+      User.findById(recipientId).select("blockedUsers"),
+    ]);
+    const isBlockedByReceiver = recipientDoc?.blockedUsers?.some((id) => areSameSocketId(id, req.userId));
+    const isBlockedBySender = senderDoc?.blockedUsers?.some((id) => areSameSocketId(id, recipientId));
+    if (isBlockedByReceiver || isBlockedBySender) {
+      return sendError(
+        res,
+        "USER_BLOCKED",
+        isBlockedByReceiver ? "You have been blocked by this user" : "You have blocked this user",
+        403
+      );
+    }
+
     const { message, created } = await createMessageOnce({
       chatId,
       senderId: req.userId,

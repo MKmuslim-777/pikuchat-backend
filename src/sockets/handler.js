@@ -73,6 +73,20 @@ export default function socketHandler(io, socket) {
         return ack?.({ success: false, error: "Invalid chat recipient" });
       }
 
+      // Check if sender or receiver has blocked the other
+      const [senderDoc, recipientDoc] = await Promise.all([
+        User.findById(userId).select("blockedUsers"),
+        User.findById(receiverId).select("blockedUsers"),
+      ]);
+      const isBlockedByReceiver = recipientDoc?.blockedUsers?.some((id) => areSameSocketId(id, userId));
+      const isBlockedBySender = senderDoc?.blockedUsers?.some((id) => areSameSocketId(id, receiverId));
+      if (isBlockedByReceiver || isBlockedBySender) {
+        return ack?.({
+          success: false,
+          error: isBlockedByReceiver ? "You have been blocked by this user" : "You have blocked this user",
+        });
+      }
+
       // Persist message
       const { message, created } = await createMessageOnce({
         chatId,

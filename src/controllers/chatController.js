@@ -70,17 +70,46 @@ async function emitGroupUpdated(io, chatId) {
 // GET /api/chats — get all chats for current user
 export async function getChats(req, res) {
   try {
-    const chats = await Chat.find({ participants: req.userId })
-      .populate({
-        path: "participants",
-        select: "name username photoURL isOnline lastSeen role status",
-      })
-      .sort({ "lastMessage.updatedAt": -1 });
+    const [chats, currentUser] = await Promise.all([
+      Chat.find({ participants: req.userId })
+        .populate({
+          path: "participants",
+          select: "name username photoURL isOnline lastSeen role status blockedUsers",
+        })
+        .sort({ "lastMessage.updatedAt": -1 }),
+      User.findById(req.userId).select("blockedUsers"),
+    ]);
 
+    const myBlocked = (currentUser?.blockedUsers || []).map((id) => id.toString());
+
+    const enrichedChats = [];
     for (const chat of chats) {
       if (chat.isGroup) await ensureGroupAdmin(chat);
+
+      const chatObj = chat.toObject ? chat.toObject() : chat;
+      if (!chatObj.isGroup) {
+        const otherParticipant = chatObj.participants?.find(
+          (p) => (p._id || p).toString() !== req.userId.toString()
+        );
+        const otherId = otherParticipant ? (otherParticipant._id || otherParticipant).toString() : null;
+        chatObj.isBlockedByMe = otherId ? myBlocked.includes(otherId) : false;
+        const otherBlockedList = (otherParticipant?.blockedUsers || []).map((id) => (id._id || id).toString());
+        chatObj.isBlockedByOther = Boolean(otherParticipant && otherBlockedList.includes(req.userId.toString()));
+      }
+      // sanitize participants to remove blockedUsers array from leaking
+      if (chatObj.participants) {
+        chatObj.participants = chatObj.participants.map((p) => {
+          if (p && typeof p === "object") {
+            const copy = { ...p };
+            delete copy.blockedUsers;
+            return copy;
+          }
+          return p;
+        });
+      }
+      enrichedChats.push(chatObj);
     }
-    sendSuccess(res, { chats });
+    sendSuccess(res, { chats: enrichedChats });
   } catch (error) {
     sendError(res, "SERVER_ERROR", error.message, 500);
   }
@@ -108,11 +137,30 @@ export async function createChat(req, res) {
       chat = await Chat.create({ participants: [req.userId, userId] });
       chat = await chat.populate({
         path: "participants",
-        select: "name username photoURL isOnline lastSeen role status",
+        select: "name username photoURL isOnline lastSeen role status blockedUsers",
       });
     }
 
-    sendSuccess(res, { chat });
+    const [currentUser, otherUser] = await Promise.all([
+      User.findById(req.userId).select("blockedUsers"),
+      User.findById(userId).select("blockedUsers"),
+    ]);
+
+    const chatObj = chat.toObject ? chat.toObject() : chat;
+    chatObj.isBlockedByMe = Boolean(currentUser?.blockedUsers?.some((id) => id.toString() === userId.toString()));
+    chatObj.isBlockedByOther = Boolean(otherUser?.blockedUsers?.some((id) => id.toString() === req.userId.toString()));
+    if (chatObj.participants) {
+      chatObj.participants = chatObj.participants.map((p) => {
+        if (p && typeof p === "object") {
+          const copy = { ...p };
+          delete copy.blockedUsers;
+          return copy;
+        }
+        return p;
+      });
+    }
+
+    sendSuccess(res, { chat: chatObj });
   } catch (error) {
     sendError(res, "SERVER_ERROR", error.message, 500);
   }
@@ -561,6 +609,22 @@ export async function blockUserInChat(req, res) {
       $addToSet: { blockedUsers: targetId },
     });
 
+    const io = getIO();
+    if (io) {
+      io.to(targetId.toString()).emit("user_blocked_status", {
+        chatId,
+        blockedBy: req.userId.toString(),
+        targetUserId: targetId.toString(),
+        isBlocked: true,
+      });
+      io.to(req.userId.toString()).emit("user_blocked_status", {
+        chatId,
+        blockedBy: req.userId.toString(),
+        targetUserId: targetId.toString(),
+        isBlocked: true,
+      });
+    }
+
     sendSuccess(res, { message: "User blocked" });
   } catch (error) {
     sendError(res, "SERVER_ERROR", error.message, 500);
@@ -582,6 +646,22 @@ export async function unblockUserInChat(req, res) {
     await User.findByIdAndUpdate(req.userId, {
       $pull: { blockedUsers: targetId },
     });
+
+    const io = getIO();
+    if (io) {
+      io.to(targetId.toString()).emit("user_blocked_status", {
+        chatId,
+        blockedBy: req.userId.toString(),
+        targetUserId: targetId.toString(),
+        isBlocked: false,
+      });
+      io.to(req.userId.toString()).emit("user_blocked_status", {
+        chatId,
+        blockedBy: req.userId.toString(),
+        targetUserId: targetId.toString(),
+        isBlocked: false,
+      });
+    }
 
     sendSuccess(res, { message: "User unblocked" });
   } catch (error) {
